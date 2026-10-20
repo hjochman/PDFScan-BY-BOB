@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PDFScan by Bob</string>
+
+    <!-- Navigation & Titles -->
+    <string name="title_scan">Scan</string>
+    <string name="title_about">About</string>
+    <string name="title_settings">Settings</string>
+    <string name="placeholder_scan">Scan screen for folder:\n%1$s\n(Will be implemented in Sub-Tasks 4 and 6)</string>
+    <string name="placeholder_about">About screen\n(Will be implemented in Sub-Task 8)</string>
+    <string name="placeholder_settings">Settings screen\n(Will be implemented in Sub-Task 7)</string>
+    <string name="default_folder_name">Scans</string>
+
+    <!-- Permission -->
+    <string name="permission_storage_title">File Access Required</string>
+    <string name="permission_storage_description">PDFScan requires storage access to manage scanned documents and folders directly in the scan directory.</string>
+    <string name="permission_storage_button">Grant File Access</string>
+
+    <!-- Empty State -->
+    <string name="empty_folder_title">This folder is empty</string>
+    <string name="empty_folder_description">Tap the camera icon to scan a new document, or create a subfolder.</string>
+
+    <!-- Actions -->
+    <string name="action_back">Back</string>
+    <string name="action_up">Up one level</string>
+    <string name="action_scan">Scan document</string>
+    <string name="action_create_folder">Create folder</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_move">Move</string>
+    <string name="action_share">Share</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_save">Save</string>
+    <string name="action_select_here">Select here</string>
+    <string name="action_keep_both">Keep both</string>
+    <string name="action_more_options">More options</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_create_folder_title">Create New Folder</string>
+    <string name="dialog_folder_name_hint">Folder name</string>
+    <string name="dialog_rename_title">Rename Entry</string>
+    <string name="dialog_rename_hint">New name</string>
+    <string name="dialog_delete_file_title">Delete Document?</string>
+    <string name="dialog_delete_file_message">Are you sure you want to permanently delete this document?</string>
+    <string name="dialog_delete_folder_title">Delete Folder?</string>
+    <string name="dialog_delete_folder_message">Are you sure you want to permanently delete this folder and all of its contents?</string>
+    <string name="dialog_picker_copy_title">Select Target Folder to Copy</string>
+    <string name="dialog_picker_move_title">Select Target Folder to Move</string>
+    <string name="dialog_conflict_title">Entry Already Exists</string>
+    <string name="dialog_conflict_message">An entry with this name already exists at the destination. Would you like to keep both (with automatic numbering) or cancel?</string>
+
+    <!-- Messages -->
+    <string name="msg_folder_created">Folder created.</string>
+    <string name="msg_renamed">Entry renamed.</string>
+    <string name="msg_deleted">Entry deleted.</string>
+    <string name="msg_copied">Entry copied.</string>
+    <string name="msg_moved">Entry moved.</string>
+    <string name="share_title">Share PDF</string>
+
+    <!-- Storage Errors -->
+    <string name="error_name_empty">Name cannot be empty.</string>
+    <string name="error_name_too_long">Name is too long (maximum 100 characters).</string>
+    <string name="error_name_control_char">Name contains invalid control characters.</string>
+    <string name="error_name_forbidden_char">Name contains invalid characters (e.g. / \\ : * ? \" &lt; &gt; |).</string>
+    <string name="error_name_dot_sequence">Name must not start or end with a dot or contain ..</string>
+    <string name="error_name_leading_trailing_space">Name must not start or end with a space.</string>
+    <string name="error_already_exists">An entry with this name already exists.</string>
+    <string name="error_outside_root">Access outside the scan folder is not allowed.</string>
+    <string name="error_not_found">File or folder was not found.</string>
+    <string name="error_invalid_target">Invalid target selected.</string>
+    <string name="error_symlink_not_supported">Symbolic links are not supported.</string>
+    <string name="error_io">Storage error while performing the action.</string>
+    <string name="error_partially_done">The action was only partially completed. Please check contents.</string>
+
+    <!-- Accessibility / Content Descriptions -->
+    <string name="cd_folder_icon">Folder</string>
+    <string name="cd_pdf_icon">PDF document</string>
+    <string name="cd_locked_folder">Locked folder</string>
+    <string name="cd_captured_image">Captured image</string>
+
+    <!-- Camera permission (scan screen) -->
+    <string name="permission_camera_title">Camera Access Required</string>
+    <string name="permission_camera_description">PDFScan needs access to the camera to scan documents.</string>
+    <string name="permission_camera_button">Grant Camera Access</string>
+    <string name="permission_camera_open_settings">Open Settings</string>
+
+    <!-- Scan actions -->
+    <string name="action_capture_photo">Take photo</string>
+    <string name="action_discard">Discard</string>
+    <string name="action_add_page">Add page</string>
+    <string name="action_finish_scan">Done</string>
+
+    <!-- Scan page flow -->
+    <string name="scan_page_number">Page %1$d</string>
+    <string name="scan_name_title">Save document (%1$d page(s))</string>
+    <string name="scan_name_label">Document name</string>
+    <string name="scan_name_hint_extension">.pdf will be appended automatically</string>
+
+    <!-- Scan errors -->
+    <string name="error_camera_bind">Could not start the camera.</string>
+    <string name="error_camera_capture">Could not take the photo.</string>
+    <string name="error_opencv_init">Image processing is not available.</string>
+    <string name="error_pdf_save">The document could not be saved.</string>
+
+    <!-- Settings -->
+    <string name="settings_section_scan_folder">Scan Folder</string>
+    <string name="settings_current_scan_folder">Current folder:</string>
+    <string name="settings_choose_folder">Choose folder</string>
+    <string name="settings_reset_folder">Reset</string>
+    <string name="settings_folder_saved">Scan folder saved.</string>
+    <string name="settings_no_subfolders">No subfolders available.</string>
+    <string name="settings_section_countdown">Auto-Capture</string>
+    <string name="settings_countdown_seconds">Countdown: %1$d seconds</string>
+    <string name="settings_countdown_off">Auto-capture: off (manual only)</string>
+    <string name="settings_countdown_hint">0 = manual trigger only. Slider: 1–10 seconds.</string>
+    <string name="error_settings_folder_invalid">The selected folder is invalid or not accessible.</string>
+    <string name="error_settings_folder_not_internal">The scan folder must be on internal storage.</string>
+    <string name="error_settings_folder_not_writable">The selected folder is not writable.</string>
+
+    <!-- PDF Viewer -->
+    <string name="title_pdf_viewer">Document</string>
+    <string name="error_pdf_open">The document could not be opened.</string>
+
+    <!-- About -->
+    <string name="about_version">Version %1$s</string>
+    <string name="about_description">PDFScan by Bob scans documents using the device camera. The app automatically detects page edges, corrects the perspective and saves multiple pages as a single PDF file.\n\nPDFs are stored directly in the configurable scan folder on internal storage and can be shared, renamed, copied or moved within the app.</string>
+    <string name="action_close">Close</string>
+</resources>

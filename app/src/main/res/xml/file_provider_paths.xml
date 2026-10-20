@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Shares files from the external storage root (used for PDFs in /Scans) -->
+    <external-path
+        name="external_files"
+        path="." />
+</paths>
