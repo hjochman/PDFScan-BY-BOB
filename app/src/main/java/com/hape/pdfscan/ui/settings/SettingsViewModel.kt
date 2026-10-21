@@ -30,6 +30,10 @@ data class SettingsUiState(
     val folderError: Int? = null,
     /** Current countdown duration in seconds; 0 = auto-capture disabled. */
     val countdownSeconds: Int = com.hape.pdfscan.storage.ScanFolderSettings.DEFAULT_COUNTDOWN_SECONDS,
+    /** Longest side of a scanned page in pixels. */
+    val maxDimension: Int = ScanFolderSettings.DEFAULT_MAX_DIMENSION,
+    /** JPEG quality of a scanned page in percent. */
+    val jpegQuality: Int = ScanFolderSettings.DEFAULT_JPEG_QUALITY,
 )
 
 data class FolderPickerUiState(
@@ -61,6 +65,26 @@ class SettingsViewModel(
                 _uiState.update { it.copy(countdownSeconds = seconds) }
             }
         }
+        viewModelScope.launch {
+            folderSettings.maxDimension.collect { px ->
+                _uiState.update { it.copy(maxDimension = px) }
+            }
+        }
+        viewModelScope.launch {
+            folderSettings.jpegQuality.collect { percent ->
+                _uiState.update { it.copy(jpegQuality = percent) }
+            }
+        }
+    }
+
+    fun onMaxDimensionChanged(pixels: Int) {
+        _uiState.update { it.copy(maxDimension = pixels) }
+        viewModelScope.launch { folderSettings.setMaxDimension(pixels) }
+    }
+
+    fun onJpegQualityChanged(percent: Int) {
+        _uiState.update { it.copy(jpegQuality = percent) }
+        viewModelScope.launch { folderSettings.setJpegQuality(percent) }
     }
 
     // ------------------------------------------------------------------

@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -23,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,17 +53,35 @@ fun PdfViewerScreen(
     val vm: PdfViewerViewModel = viewModel(factory = PdfViewerViewModel.Factory(pdfFile))
     val state by vm.state.collectAsState()
 
+    val pageCount = (state as? PdfViewerState.Ready)?.pages?.size ?: 0
+    val pagerState = rememberPagerState { pageCount }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
-                    val title = if (state is PdfViewerState.Ready) {
-                        (state as PdfViewerState.Ready).fileName
+                    if (state is PdfViewerState.Ready) {
+                        val fileName = (state as PdfViewerState.Ready).fileName
+                        val currentPage by remember { derivedStateOf { pagerState.currentPage + 1 } }
+                        Column {
+                            Text(
+                                text = fileName,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = stringResource(R.string.viewer_page_indicator, currentPage, pageCount),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
                     } else {
-                        stringResource(R.string.title_pdf_viewer)
+                        Text(
+                            text = stringResource(R.string.title_pdf_viewer),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
-                    Text(text = title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
@@ -93,14 +113,13 @@ fun PdfViewerScreen(
                 is PdfViewerState.Ready -> {
                     val pages = s.pages
                     if (pages.size == 1) {
-                        // Single page – show directly with zoom
+                        // Single page – show directly with zoom; pagerState stays at page 0 → "1/1"
                         ZoomablePage(
                             bitmap = pages[0],
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
-                        // Multiple pages – HorizontalPager, zoom resets on page change
-                        val pagerState = rememberPagerState { pages.size }
+                        // Multiple pages – HorizontalPager with shared pagerState
                         HorizontalPager(
                             state = pagerState,
                             modifier = Modifier.fillMaxSize(),

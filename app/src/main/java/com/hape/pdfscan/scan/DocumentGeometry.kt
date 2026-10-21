@@ -42,17 +42,121 @@ object DocumentGeometry {
     }
 
     /**
+     * Estimates the physical aspect ratio (width / height) of a planar rectangular
+     * document observed under perspective projection as [corners].
+     *
+     * Uses vanishing point homography analysis to account for foreshortening and perspective distortion.
+     * Falls back to opposite edge averages when perspective cues are weak or near-frontal.
+     */
+    fun estimateAspectRatio(corners: DocumentCorners): Float {
+        val p1 = corners.topLeft
+        val p2 = corners.topRight
+        val p3 = corners.bottomRight
+        val p4 = corners.bottomLeft
+
+        // 2D fallback: average edge lengths
+        val topWidth = dist(p1, p2).toDouble()
+        val botWidth = dist(p4, p3).toDouble()
+        val leftHeight = dist(p1, p4).toDouble()
+        val rightHeight = dist(p2, p3).toDouble()
+        val avgWidth = (topWidth + botWidth) / 2.0
+        val avgHeight = (leftHeight + rightHeight) / 2.0
+        val fallbackRatio = if (avgHeight > 0.0) (avgWidth / avgHeight).toFloat() else 1f
+
+        // Center coordinates on the quad centroid
+        val cx = (p1.x + p2.x + p3.x + p4.x) / 4.0
+        val cy = (p1.y + p2.y + p3.y + p4.y) / 4.0
+
+        val x1 = p1.x.toDouble() - cx; val y1 = p1.y.toDouble() - cy
+        val x2 = p2.x.toDouble() - cx; val y2 = p2.y.toDouble() - cy
+        val x3 = p3.x.toDouble() - cx; val y3 = p3.y.toDouble() - cy
+        val x4 = p4.x.toDouble() - cx; val y4 = p4.y.toDouble() - cy
+
+        // Cross product scalar for 2D points: (a x b)_z = a.x * b.y - a.y * b.x
+        fun cross2d(ax: Double, ay: Double, bx: Double, by: Double): Double = ax * by - ay * bx
+
+        // Determinant for 3 homogeneous points [a, b, c]
+        fun det3(
+            ax: Double, ay: Double,
+            bx: Double, by: Double,
+            cx: Double, cy: Double,
+        ): Double = ax * (by - cy) - ay * (bx - cx) + cross2d(bx, by, cx, cy)
+
+        val d143 = det3(x1, y1, x4, y4, x3, y3)
+        val d243 = det3(x2, y2, x4, y4, x3, y3)
+        val d124 = det3(x1, y1, x2, y2, x4, y4)
+        val d324 = det3(x3, y3, x2, y2, x4, y4)
+
+        if (abs(d243) < 1e-7 || abs(d324) < 1e-7) {
+            return fallbackRatio
+        }
+
+        val k2 = abs(d143 / d243)
+        val k3 = abs(d124 / d324)
+
+        val d123 = det3(x1, y1, x2, y2, x3, y3)
+        val d423 = det3(x4, y4, x2, y2, x3, y3)
+        val k4 = if (abs(d423) > 1e-7) abs(d123 / d423) else (k2 + k3 - 1.0).coerceAtLeast(0.1)
+
+        val quadDiag = hypot(x3 - x1, y3 - y1)
+        val defaultF = max(quadDiag * 1.2, 500.0)
+
+        // Numerator and denominator for focal length from orthogonality condition
+        val num = (k2 * x2 - x1) * (k4 * x4 - x1) + (k2 * y2 - y1) * (k4 * y4 - y1)
+        val den = (k2 - 1.0) * (k4 - 1.0)
+
+        val f2 = if (abs(den) > 1e-7) -num / den else -1.0
+        val minF = 0.5 * quadDiag
+        val maxF = 4.0 * quadDiag
+
+        val f = if (f2 > minF * minF && f2 < maxF * maxF) {
+            kotlin.math.sqrt(f2)
+        } else {
+            defaultF
+        }
+
+        val w3d = kotlin.math.sqrt(
+            ((k2 * x2 - x1) * (k2 * x2 - x1) + (k2 * y2 - y1) * (k2 * y2 - y1)) / (f * f) +
+                (k2 - 1.0) * (k2 - 1.0)
+        )
+        val h3d = kotlin.math.sqrt(
+            ((k4 * x4 - x1) * (k4 * x4 - x1) + (k4 * y4 - y1) * (k4 * y4 - y1)) / (f * f) +
+                (k4 - 1.0) * (k4 - 1.0)
+        )
+
+        if (h3d <= 1e-7) return fallbackRatio
+        val ratio = (w3d / h3d).toFloat()
+        return if (ratio.isFinite() && ratio in 0.1f..10.0f) ratio else fallbackRatio
+    }
+
+    /**
      * Derives an output size (width × height) from the corners of the detected
-     * document.  Uses the maximum of the two opposite edge lengths for width and
-     * height respectively, capped at [maxDimension].
+     * document, correcting for perspective distortion so the true aspect ratio is preserved.
+     * The longer side is at most [maxDimension].
      */
     fun targetSize(corners: DocumentCorners, maxDimension: Int = 2048): Pair<Int, Int> {
         val topWidth = dist(corners.topLeft, corners.topRight)
         val bottomWidth = dist(corners.bottomLeft, corners.bottomRight)
         val leftHeight = dist(corners.topLeft, corners.bottomLeft)
         val rightHeight = dist(corners.topRight, corners.bottomRight)
-        val width = max(topWidth, bottomWidth).roundToInt().coerceIn(1, maxDimension)
-        val height = max(leftHeight, rightHeight).roundToInt().coerceIn(1, maxDimension)
+        val maxObserved = max(max(topWidth, bottomWidth), max(leftHeight, rightHeight))
+
+        val aspectRatio = estimateAspectRatio(corners)
+
+        val rawWidth: Float
+        val rawHeight: Float
+        if (aspectRatio >= 1f) {
+            rawWidth = maxObserved
+            rawHeight = maxObserved / aspectRatio
+        } else {
+            rawHeight = maxObserved
+            rawWidth = maxObserved * aspectRatio
+        }
+
+        val longest = max(rawWidth, rawHeight)
+        val scale = if (longest > maxDimension) maxDimension / longest else 1f
+        val width = (rawWidth * scale).roundToInt().coerceIn(1, maxDimension)
+        val height = (rawHeight * scale).roundToInt().coerceIn(1, maxDimension)
         return width to height
     }
 
@@ -136,10 +240,13 @@ object DocumentGeometry {
     }
 
     /** Quadrilateral frames above this fraction of the image are the image border, not a page. */
-    const val MAX_FRAME_FRACTION = 0.95
+    const val MAX_FRAME_FRACTION = 0.90
 
-    /** Minimum [quadScore] for the robust detection stage to report a page. */
-    const val MIN_SCORE = 0.25
+    /** Minimum edge support for a quad candidate to be considered a document. */
+    const val MIN_EDGE_SUPPORT = 0.20f
+
+    /** Minimum [quadScore] for detection to report a page. */
+    const val MIN_SCORE = 0.10
 
     /**
      * Fraction of points sampled along the four sides of [corners] that lie on an edge pixel
@@ -168,12 +275,18 @@ object DocumentGeometry {
     }
 
     /**
-     * Ranks a quadrilateral candidate: large, rectangular-looking blob, and its border
-     * is backed by edges. [contourArea] is the area of the blob the quad was derived from.
+     * Ranks a quadrilateral candidate: prefers clear edge support and plausible document size,
+     * with a bonus for filled contour blobs when available.
      */
-    fun quadScore(quadArea: Double, frameArea: Double, contourArea: Double, edgeSupport: Float): Double {
-        if (quadArea <= 0.0 || frameArea <= 0.0) return 0.0
-        return kotlin.math.sqrt(quadArea / frameArea) * min(1.0, contourArea / quadArea) * edgeSupport
+    fun quadScore(quadArea: Double, frameArea: Double, contourArea: Double = 0.0, edgeSupport: Float): Double {
+        if (quadArea <= 0.0 || frameArea <= 0.0 || edgeSupport < MIN_EDGE_SUPPORT) return 0.0
+        val sizeFactor = kotlin.math.sqrt(quadArea / frameArea).coerceIn(0.1, 1.0)
+        val fillFactor = if (contourArea > 0.0) {
+            (0.6 + 0.4 * min(1.0, contourArea / quadArea)).toFloat()
+        } else {
+            0.8f
+        }
+        return sizeFactor * fillFactor * edgeSupport
     }
 
     /** Area of the quadrilateral (shoelace formula). */

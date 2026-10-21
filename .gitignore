@@ -29,3 +29,6 @@ PDFScan-by-Bob-*.apk
 
 # Local experiments
 scratch/
+
+# Local agent scratch files (screenshots etc.)
+.bob/

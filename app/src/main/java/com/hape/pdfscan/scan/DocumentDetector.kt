@@ -27,7 +27,7 @@ private const val DETECTION_MAX_SIDE = 1000
 private const val ROBUST_MIN_AREA_FRACTION = 0.05f
 
 /** Number of largest contours per mask that the robust stage turns into quad candidates. */
-private const val ROBUST_TOP_CONTOURS = 8
+private const val ROBUST_TOP_CONTOURS = 16
 
 /**
  * Initialises the OpenCV native library (libopencv_java5.so).
@@ -104,13 +104,14 @@ object DocumentDetector {
 
     /**
      * Applies perspective correction to [bitmap] using [corners] (in bitmap coordinates).
+     * The longer side of the result is at most [maxDimension] px; the aspect ratio is kept.
      * Returns a new [Bitmap] or null on failure. The caller must recycle it.
      */
-    fun crop(bitmap: Bitmap, corners: DocumentCorners): Bitmap? {
+    fun crop(bitmap: Bitmap, corners: DocumentCorners, maxDimension: Int = 2048): Bitmap? {
         val src = Mat()
         Utils.bitmapToMat(bitmap, src)
         return try {
-            cropMat(src, corners)
+            cropMat(src, corners, maxDimension)
         } finally {
             src.release()
         }
@@ -140,12 +141,8 @@ object DocumentDetector {
             // Utils.bitmapToMat yields RGBA
             Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGBA2GRAY)
 
-            var stage = 1
-            var best = detectByEdges(gray, smallW, smallH)
-            if (best == null) {
-                stage = 2
-                best = detectRobust(gray, smallW, smallH)
-            }
+            val stage = 1
+            val best = detectRobust(gray, smallW, smallH)
 
             val ts = System.currentTimeMillis()
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
@@ -161,7 +158,7 @@ object DocumentDetector {
         }
     }
 
-    /** Stage 1: Canny + external contours; picks the largest plausible quad. */
+    /** Stage 1: Canny + contours; picks the highest scoring plausible quad backed by edges. */
     private fun detectByEdges(gray: Mat, w: Int, h: Int): DocumentCorners? {
         val blurred = Mat()
         val edges = Mat()
@@ -172,23 +169,43 @@ object DocumentDetector {
             Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
             Imgproc.Canny(blurred, edges, 50.0, 150.0)
             Imgproc.dilate(edges, edges, kernel)
-            Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
+            Imgproc.findContours(edges, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
 
-            var bestArea = 0.0
+            val frameArea = w.toDouble() * h
+            val support = ByteArray(w * h)
+            edges.get(0, 0, support)
+
+            var bestScore = 0.0
             var bestCorners: DocumentCorners? = null
             val sorted = contours
                 .map { it to Geometry.contourArea(it) }
                 .sortedByDescending { it.second }
                 .take(ROBUST_TOP_CONTOURS)
-            for ((contour, _) in sorted) {
-                val corners = approxQuad(contour, w, h, minAreaFraction = 0.02f, epsilons = floatArrayOf(0.02f, 0.03f, 0.015f)) ?: continue
-                val area = DocumentGeometry.area(corners)
-                if (area > bestArea) {
-                    bestArea = area
-                    bestCorners = corners
+            for ((contour, contourArea) in sorted) {
+                val checkCorners: (DocumentCorners) -> Unit = { corners ->
+                    val area = DocumentGeometry.area(corners)
+                    if (area / frameArea <= DocumentGeometry.MAX_FRAME_FRACTION) {
+                        val sup = DocumentGeometry.edgeSupport(corners) { x, y ->
+                            x in 0 until w && y in 0 until h && support[y * w + x].toInt() != 0
+                        }
+                        val score = DocumentGeometry.quadScore(area, frameArea, contourArea, sup)
+                        if (score > bestScore) {
+                            bestScore = score
+                            bestCorners = corners
+                        }
+                    }
+                }
+                approxQuad(contour, w, h, minAreaFraction = 0.02f)?.let(checkCorners)
+                val hull = convexHullOf(contour)
+                if (hull != null) {
+                    try {
+                        approxQuad(hull, w, h, minAreaFraction = 0.02f)?.let(checkCorners)
+                    } finally {
+                        hull.release()
+                    }
                 }
             }
-            return bestCorners
+            return if (bestScore >= DocumentGeometry.MIN_SCORE) bestCorners else null
         } finally {
             kernel.release()
             blurred.release()
@@ -208,20 +225,22 @@ object DocumentDetector {
         val cSens = Mat()
         val both = Mat()
         val supportMat = Mat()
-        val closedEdges = Mat()
+        val closedBoth = Mat()
+        val closedSens = Mat()
         val edgesS1 = Mat()
         val otsu = Mat()
         val otsuInv = Mat()
         val k3 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
         val k5 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+        val k7 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(7.0, 7.0))
         val k9 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
         val anchor = Point(-1.0, -1.0)
         val masks = mutableListOf<Mat>()
         try {
-            Imgproc.GaussianBlur(gray, blur, Size(7.0, 7.0), 0.0)
+            Imgproc.GaussianBlur(gray, blur, Size(5.0, 5.0), 0.0)
             val median = medianOf(blur)
-            Imgproc.Canny(blur, cAuto, max(10.0, 0.66 * median), min(255.0, max(40.0, 1.33 * median)))
-            Imgproc.Canny(blur, cSens, 20.0, 60.0)
+            Imgproc.Canny(blur, cAuto, max(10.0, 0.5 * median), min(255.0, max(30.0, 1.2 * median)))
+            Imgproc.Canny(blur, cSens, 15.0, 50.0)
 
             // Edge map used to verify candidates: sensitive edges count as support.
             Core.bitwise_or(cAuto, cSens, both)
@@ -229,8 +248,12 @@ object DocumentDetector {
             val support = ByteArray(w * h)
             supportMat.get(0, 0, support)
 
-            Imgproc.morphologyEx(cAuto, closedEdges, Imgproc.MORPH_CLOSE, k5, anchor, 2)
-            masks += closedEdges
+            // Closed edge masks (connects subtle document boundaries)
+            Imgproc.morphologyEx(both, closedBoth, Imgproc.MORPH_CLOSE, k7, anchor, 2)
+            masks += closedBoth
+
+            Imgproc.morphologyEx(cSens, closedSens, Imgproc.MORPH_CLOSE, k5, anchor, 2)
+            masks += closedSens
 
             // Bright page on darker surface, and the inverse; opening removes thin texture bridges.
             Imgproc.threshold(blur, otsu, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
@@ -241,9 +264,8 @@ object DocumentDetector {
                 masks += m
             }
 
-            // Also include dilated Stage 1 Canny edges as a candidate source
-            Imgproc.Canny(blur, edgesS1, 50.0, 150.0)
-            Imgproc.dilate(edgesS1, edgesS1, k3)
+            // Dilated Canny edges
+            Imgproc.dilate(both, edgesS1, k3)
             masks += edgesS1
 
             val candidates = mutableListOf<Candidate>()
@@ -266,7 +288,7 @@ object DocumentDetector {
             }
             return if (bestScore >= DocumentGeometry.MIN_SCORE) best else null
         } finally {
-            listOf(blur, cAuto, cSens, both, supportMat, closedEdges, edgesS1, otsu, otsuInv, k3, k5, k9).forEach { it.release() }
+            listOf(blur, cAuto, cSens, both, supportMat, closedBoth, closedSens, edgesS1, otsu, otsuInv, k3, k5, k7, k9).forEach { it.release() }
         }
     }
 
@@ -303,7 +325,7 @@ object DocumentDetector {
         w: Int,
         h: Int,
         minAreaFraction: Float,
-        epsilons: FloatArray = floatArrayOf(0.02f, 0.03f, 0.04f, 0.015f),
+        epsilons: FloatArray = floatArrayOf(0.02f, 0.03f, 0.04f, 0.05f, 0.015f, 0.06f, 0.08f),
     ): DocumentCorners? {
         val contour2f = MatOfPoint2f()
         val approx = MatOfPoint2f()
@@ -314,9 +336,15 @@ object DocumentDetector {
 
             for (eps in epsilons) {
                 Geometry.approxPolyDP(contour2f, approx, eps.toDouble() * arcLen, true)
-                if (approx.total() == 4L) {
+                val total = approx.total()
+                if (total == 4L) {
                     val pts = approx.toArray()
                     val corners = DocumentGeometry.orderCorners(pts.map { FloatPoint(it.x.toFloat(), it.y.toFloat()) })
+                    if (DocumentGeometry.isPlausibleQuad(corners, w, h, minAreaFraction)) {
+                        return corners
+                    }
+                } else if (total in 5L..12L) {
+                    val corners = cornersFromPoints(approx.toArray())
                     if (DocumentGeometry.isPlausibleQuad(corners, w, h, minAreaFraction)) {
                         return corners
                     }
@@ -327,6 +355,28 @@ object DocumentDetector {
             contour2f.release()
             approx.release()
         }
+    }
+
+    private fun cornersFromPoints(points: Array<Point>): DocumentCorners {
+        var tl = points[0]; var minSum = tl.x + tl.y
+        var br = points[0]; var maxSum = br.x + br.y
+        var tr = points[0]; var maxDiff = tr.x - tr.y
+        var bl = points[0]; var minDiff = bl.x - bl.y
+
+        for (p in points) {
+            val sum = p.x + p.y
+            val diff = p.x - p.y
+            if (sum < minSum) { minSum = sum; tl = p }
+            if (sum > maxSum) { maxSum = sum; br = p }
+            if (diff > maxDiff) { maxDiff = diff; tr = p }
+            if (diff < minDiff) { minDiff = diff; bl = p }
+        }
+        return DocumentCorners(
+            topLeft = FloatPoint(tl.x.toFloat(), tl.y.toFloat()),
+            topRight = FloatPoint(tr.x.toFloat(), tr.y.toFloat()),
+            bottomRight = FloatPoint(br.x.toFloat(), br.y.toFloat()),
+            bottomLeft = FloatPoint(bl.x.toFloat(), bl.y.toFloat()),
+        )
     }
 
     private fun convexHullOf(contour: MatOfPoint): MatOfPoint? {
@@ -361,8 +411,8 @@ object DocumentDetector {
         return 128.0
     }
 
-    private fun cropMat(src: Mat, corners: DocumentCorners): Bitmap? {
-        val (outW, outH) = DocumentGeometry.targetSize(corners)
+    private fun cropMat(src: Mat, corners: DocumentCorners, maxDimension: Int): Bitmap? {
+        val (outW, outH) = DocumentGeometry.targetSize(corners, maxDimension)
         val srcPts = MatOfPoint2f(
             Point(corners.topLeft.x.toDouble(), corners.topLeft.y.toDouble()),
             Point(corners.topRight.x.toDouble(), corners.topRight.y.toDouble()),

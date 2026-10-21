@@ -67,12 +67,60 @@ class ScanFolderSettings(
         dataStore.edit { it.remove(KEY_COUNTDOWN_SECONDS) }
     }
 
+    // ------------------------------------------------------------------
+    // Image resolution (longest side in px) and JPEG quality for new scans
+    // ------------------------------------------------------------------
+
+    val maxDimension: Flow<Int> = dataStore.data
+        .map { prefs -> prefs[KEY_MAX_DIMENSION] ?: DEFAULT_MAX_DIMENSION }
+        .distinctUntilChanged()
+
+    suspend fun setMaxDimension(pixels: Int) {
+        dataStore.edit { it[KEY_MAX_DIMENSION] = pixels.coerceIn(MIN_MAX_DIMENSION, MAX_MAX_DIMENSION) }
+    }
+
+    val jpegQuality: Flow<Int> = dataStore.data
+        .map { prefs -> prefs[KEY_JPEG_QUALITY] ?: DEFAULT_JPEG_QUALITY }
+        .distinctUntilChanged()
+
+    suspend fun setJpegQuality(percent: Int) {
+        dataStore.edit { it[KEY_JPEG_QUALITY] = percent.coerceIn(MIN_JPEG_QUALITY, MAX_JPEG_QUALITY) }
+    }
+
+    // ------------------------------------------------------------------
+    // Edge smoothing strength of the live overlay (0 = off .. 10 = strong)
+    // ------------------------------------------------------------------
+
+    val smoothingStrength: Flow<Int> = dataStore.data
+        .map { prefs -> prefs[KEY_SMOOTHING_STRENGTH] ?: DEFAULT_SMOOTHING_STRENGTH }
+        .distinctUntilChanged()
+
+    suspend fun setSmoothingStrength(strength: Int) {
+        dataStore.edit {
+            it[KEY_SMOOTHING_STRENGTH] = strength.coerceIn(MIN_SMOOTHING_STRENGTH, MAX_SMOOTHING_STRENGTH)
+        }
+    }
+
     companion object {
         const val DEFAULT_FOLDER_NAME = "Scans"
+        const val DEFAULT_SMOOTHING_STRENGTH = 5
+        const val MIN_SMOOTHING_STRENGTH = 0
+        const val MAX_SMOOTHING_STRENGTH = 10
         const val DEFAULT_COUNTDOWN_SECONDS = 3
         const val MAX_COUNTDOWN_SECONDS = 10
+        const val DEFAULT_MAX_DIMENSION = 2000
+        const val MIN_MAX_DIMENSION = 1200
+        const val MAX_MAX_DIMENSION = 3000
+        const val MAX_DIMENSION_STEP = 100
+        const val DEFAULT_JPEG_QUALITY = 80
+        const val MIN_JPEG_QUALITY = 50
+        const val MAX_JPEG_QUALITY = 95
+        const val JPEG_QUALITY_STEP = 5
         private val KEY_SCAN_FOLDER = stringPreferencesKey("scan_folder_path")
         val KEY_COUNTDOWN_SECONDS = intPreferencesKey("auto_capture_countdown_seconds")
+        private val KEY_MAX_DIMENSION = intPreferencesKey("scan_max_dimension_px")
+        private val KEY_JPEG_QUALITY = intPreferencesKey("scan_jpeg_quality_percent")
+        private val KEY_SMOOTHING_STRENGTH = intPreferencesKey("scan_smoothing_strength")
     }
 }
 

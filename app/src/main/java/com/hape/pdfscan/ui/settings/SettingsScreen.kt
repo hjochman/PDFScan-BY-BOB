@@ -1,6 +1,8 @@
 package com.hape.pdfscan.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -105,6 +107,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             // Section: Scan folder
@@ -169,6 +172,51 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Section: PDF size (resolution + JPEG quality)
+            Text(
+                text = stringResource(R.string.settings_section_pdf_size),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = stringResource(R.string.settings_resolution_value, uiState.maxDimension),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Slider(
+                value = uiState.maxDimension.toFloat(),
+                onValueChange = { vm.onMaxDimensionChanged(it.roundToStep(ScanFolderSettings.MAX_DIMENSION_STEP)) },
+                valueRange = ScanFolderSettings.MIN_MAX_DIMENSION.toFloat()..ScanFolderSettings.MAX_MAX_DIMENSION.toFloat(),
+                steps = (ScanFolderSettings.MAX_MAX_DIMENSION - ScanFolderSettings.MIN_MAX_DIMENSION) /
+                    ScanFolderSettings.MAX_DIMENSION_STEP - 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = stringResource(R.string.settings_quality_value, uiState.jpegQuality),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Slider(
+                value = uiState.jpegQuality.toFloat(),
+                onValueChange = { vm.onJpegQualityChanged(it.roundToStep(ScanFolderSettings.JPEG_QUALITY_STEP)) },
+                valueRange = ScanFolderSettings.MIN_JPEG_QUALITY.toFloat()..ScanFolderSettings.MAX_JPEG_QUALITY.toFloat(),
+                steps = (ScanFolderSettings.MAX_JPEG_QUALITY - ScanFolderSettings.MIN_JPEG_QUALITY) /
+                    ScanFolderSettings.JPEG_QUALITY_STEP - 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = stringResource(R.string.settings_pdf_size_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // Folder picker dialog
@@ -184,6 +232,9 @@ fun SettingsScreen(
         }
     }
 }
+
+/** Rounds a slider value to the nearest multiple of [step]. */
+private fun Float.roundToStep(step: Int): Int = (Math.round(this / step) * step)
 
 // =============================================================================
 // Folder picker dialog (settings-specific, no copy/move logic)

@@ -21,10 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,7 +37,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -54,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -72,11 +78,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hape.pdfscan.R
 import com.hape.pdfscan.scan.AutoCaptureState
 import com.hape.pdfscan.scan.DetectionResult
+import com.hape.pdfscan.scan.DocumentCorners
 import com.hape.pdfscan.scan.DocumentGeometry
 import com.hape.pdfscan.scan.FloatPoint
 import com.hape.pdfscan.storage.ScanFileRepository
 import com.hape.pdfscan.storage.ScanFolderSettings
 import java.io.File
+import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -195,10 +205,14 @@ fun ScanScreen(
                     val autoCaptureState by viewModel.autoCaptureState.collectAsState()
                     val isDebuggable = (context.applicationInfo.flags and
                         android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                    val smoothingStrength by viewModel.smoothingStrength.collectAsState()
                     CameraPreviewContent(
                         latestDetection = state.latestDetection,
                         autoCaptureState = autoCaptureState,
                         diagnostics = if (isDebuggable) diagnostics else null,
+                        smoothingStrength = smoothingStrength,
+                        isCapturing = state.isCapturing,
+                        onSmoothingStrengthChange = viewModel::onSmoothingStrengthChanged,
                         onCapture = { controller.capture(context.cacheDir) },
                         onBind = { previewView ->
                             controller.bindCamera(previewView, lifecycleOwner)
@@ -210,9 +224,19 @@ fun ScanScreen(
                     PagePreviewContent(
                         page = state.newPage,
                         pageNumber = state.pages.size + 1,
+                        onAdjustCrop = { viewModel.onOpenCropAdjustment() },
                         onDiscard = { viewModel.onDiscardPage() },
                         onAddAnother = { viewModel.onAddAnotherPage() },
                         onFinish = { viewModel.onFinishScanning() },
+                    )
+                }
+
+                is ScanUiState.AdjustCrop -> {
+                    AdjustCropContent(
+                        rawBitmap = state.rawBitmap,
+                        initialCorners = state.initialCorners,
+                        onApply = { viewModel.onApplyCrop(it) },
+                        onCancel = { viewModel.onCancelCrop() },
                     )
                 }
 
@@ -253,6 +277,9 @@ private fun CameraPreviewContent(
     latestDetection: DetectionResult?,
     autoCaptureState: AutoCaptureState,
     diagnostics: String?,
+    smoothingStrength: Int,
+    isCapturing: Boolean,
+    onSmoothingStrengthChange: (Int) -> Unit,
     onCapture: () -> Unit,
     onBind: (androidx.camera.view.PreviewView) -> Unit,
     modifier: Modifier = Modifier,
@@ -293,7 +320,7 @@ private fun CameraPreviewContent(
             )
         }
 
-        if (autoCaptureState is AutoCaptureState.Stable) {
+        if (!isCapturing && autoCaptureState is AutoCaptureState.Stable) {
             CountdownDisplay(
                 remainingSeconds = autoCaptureState.remainingSeconds,
                 modifier = Modifier
@@ -302,8 +329,59 @@ private fun CameraPreviewContent(
             )
         }
 
+        if (isCapturing) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color(0xCC000000), shape = RoundedCornerShape(16.dp))
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = Color.White,
+                        strokeWidth = 2.5.dp,
+                    )
+                    Text(
+                        text = stringResource(R.string.scan_processing_photo),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+
+        // Smoothing slider sits above the capture button (72 dp + 32 dp padding) so it never covers it
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 112.dp)
+                .fillMaxWidth(0.7f)
+                .background(Color(0x99000000), shape = RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = stringResource(R.string.scan_smoothing_label, smoothingStrength),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Slider(
+                value = smoothingStrength.toFloat(),
+                onValueChange = { onSmoothingStrengthChange(it.roundToInt()) },
+                valueRange = 0f..10f,
+                steps = 9,
+                enabled = !isCapturing,
+            )
+        }
+
         CaptureButton(
             onClick = onCapture,
+            enabled = !isCapturing,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 32.dp),
@@ -368,16 +446,18 @@ private fun DocumentOverlay(
 @Composable
 private fun CaptureButton(
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     IconButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier.size(72.dp),
     ) {
         Icon(
             painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_camera),
             contentDescription = stringResource(R.string.action_capture_photo),
-            tint = Color.White,
+            tint = if (enabled) Color.White else Color.White.copy(alpha = 0.5f),
             modifier = Modifier.size(48.dp),
         )
     }
@@ -391,6 +471,7 @@ private fun CaptureButton(
 private fun PagePreviewContent(
     page: ScannedPage,
     pageNumber: Int,
+    onAdjustCrop: () -> Unit,
     onDiscard: () -> Unit,
     onAddAnother: () -> Unit,
     onFinish: () -> Unit,
@@ -414,11 +495,25 @@ private fun PagePreviewContent(
                 .fillMaxWidth()
                 .background(Color.Black),
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+        if (page.rawFile != null) {
+            OutlinedButton(
+                onClick = onAdjustCrop,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = stringResource(R.string.action_adjust_crop))
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(
@@ -438,6 +533,211 @@ private fun PagePreviewContent(
                 modifier = Modifier.weight(1f),
             ) {
                 Text(text = stringResource(R.string.action_finish_scan))
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Manual Crop Adjustment
+// =============================================================================
+
+@Composable
+private fun AdjustCropContent(
+    rawBitmap: android.graphics.Bitmap,
+    initialCorners: DocumentCorners,
+    onApply: (DocumentCorners) -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var corners by remember { mutableStateOf(initialCorners) }
+    var activeCornerIndex by remember { mutableStateOf<Int?>(null) }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    val rawWidth = rawBitmap.width.toFloat()
+    val rawHeight = rawBitmap.height.toFloat()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Top instruction bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.crop_hint),
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = {
+                    corners = DocumentCorners(
+                        topLeft = FloatPoint(0f, 0f),
+                        topRight = FloatPoint(rawWidth, 0f),
+                        bottomRight = FloatPoint(rawWidth, rawHeight),
+                        bottomLeft = FloatPoint(0f, rawHeight),
+                    )
+                }
+            ) {
+                Text(text = stringResource(R.string.action_reset_crop), color = Color(0xFF38B6FF))
+            }
+        }
+
+        // Image canvas with interactive drag overlay
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(8.dp)
+                .onSizeChanged { containerSize = it }
+                .pointerInput(containerSize, rawWidth, rawHeight) {
+                    if (containerSize.width <= 0 || containerSize.height <= 0) return@pointerInput
+
+                    val scale = min(
+                        containerSize.width.toFloat() / rawWidth,
+                        containerSize.height.toFloat() / rawHeight
+                    )
+                    val displayW = rawWidth * scale
+                    val displayH = rawHeight * scale
+                    val offsetX = (containerSize.width - displayW) / 2f
+                    val offsetY = (containerSize.height - displayH) / 2f
+
+                    fun toScreen(p: FloatPoint): Offset =
+                        Offset(offsetX + p.x * scale, offsetY + p.y * scale)
+
+                    val touchRadiusPx = 48.dp.toPx()
+
+                    detectDragGestures(
+                        onDragStart = { startOffset ->
+                            val screenPts = listOf(
+                                toScreen(corners.topLeft),
+                                toScreen(corners.topRight),
+                                toScreen(corners.bottomRight),
+                                toScreen(corners.bottomLeft),
+                            )
+                            val distances = screenPts.map { hypot(startOffset.x - it.x, startOffset.y - it.y) }
+                            val minIndex = distances.indices.minByOrNull { distances[it] }
+                            if (minIndex != null && distances[minIndex] <= touchRadiusPx) {
+                                activeCornerIndex = minIndex
+                            } else {
+                                activeCornerIndex = null
+                            }
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val idx = activeCornerIndex ?: return@detectDragGestures
+                            val dxImg = dragAmount.x / scale
+                            val dyImg = dragAmount.y / scale
+                            corners = when (idx) {
+                                0 -> corners.copy(topLeft = FloatPoint((corners.topLeft.x + dxImg).coerceIn(0f, rawWidth), (corners.topLeft.y + dyImg).coerceIn(0f, rawHeight)))
+                                1 -> corners.copy(topRight = FloatPoint((corners.topRight.x + dxImg).coerceIn(0f, rawWidth), (corners.topRight.y + dyImg).coerceIn(0f, rawHeight)))
+                                2 -> corners.copy(bottomRight = FloatPoint((corners.bottomRight.x + dxImg).coerceIn(0f, rawWidth), (corners.bottomRight.y + dyImg).coerceIn(0f, rawHeight)))
+                                3 -> corners.copy(bottomLeft = FloatPoint((corners.bottomLeft.x + dxImg).coerceIn(0f, rawWidth), (corners.bottomLeft.y + dyImg).coerceIn(0f, rawHeight)))
+                                else -> corners
+                            }
+                        },
+                        onDragEnd = {
+                            activeCornerIndex = null
+                        },
+                        onDragCancel = {
+                            activeCornerIndex = null
+                        }
+                    )
+                }
+        ) {
+            Image(
+                bitmap = rawBitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (size.width <= 0 || size.height <= 0) return@Canvas
+                val scale = min(
+                    size.width / rawWidth,
+                    size.height / rawHeight
+                )
+                val displayW = rawWidth * scale
+                val displayH = rawHeight * scale
+                val offsetX = (size.width - displayW) / 2f
+                val offsetY = (size.height - displayH) / 2f
+
+                fun map(p: FloatPoint): Offset =
+                    Offset(offsetX + p.x * scale, offsetY + p.y * scale)
+
+                val tl = map(corners.topLeft)
+                val tr = map(corners.topRight)
+                val br = map(corners.bottomRight)
+                val bl = map(corners.bottomLeft)
+
+                // Fill polygon
+                val path = Path().apply {
+                    moveTo(tl.x, tl.y)
+                    lineTo(tr.x, tr.y)
+                    lineTo(br.x, br.y)
+                    lineTo(bl.x, bl.y)
+                    close()
+                }
+                drawPath(path, color = Color(0x3300AAFF))
+                drawPath(path, color = Color(0xFF00AAFF), style = Stroke(width = 3.dp.toPx()))
+
+                // Draw handles
+                val pts = listOf(tl, tr, br, bl)
+                for (i in pts.indices) {
+                    val pt = pts[i]
+                    val isActive = i == activeCornerIndex
+                    val outerRadius = if (isActive) 18.dp.toPx() else 14.dp.toPx()
+                    val innerRadius = if (isActive) 10.dp.toPx() else 7.dp.toPx()
+
+                    // Semi-transparent halo
+                    drawCircle(
+                        color = Color(0x6600AAFF),
+                        radius = outerRadius + 6.dp.toPx(),
+                        center = pt
+                    )
+                    // White outer ring
+                    drawCircle(
+                        color = Color.White,
+                        radius = outerRadius,
+                        center = pt
+                    )
+                    // Cyan filled center
+                    drawCircle(
+                        color = Color(0xFF0088EE),
+                        radius = innerRadius,
+                        center = pt
+                    )
+                }
+            }
+        }
+
+        // Bottom action buttons
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(text = stringResource(R.string.action_cancel))
+            }
+            Button(
+                onClick = { onApply(corners) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(text = stringResource(R.string.action_apply_crop))
             }
         }
     }

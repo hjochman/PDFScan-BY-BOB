@@ -193,6 +193,26 @@ class AutoCaptureControllerTest {
         assertEquals(AutoCaptureState.Stable(2), controller.state.value)
     }
 
+    @Test
+    fun `no new countdown started after firing until reset`() = testScope.runTest {
+        controller.onDetectionResult(makeResult(stableCorners()))
+        advanceTimeBy(3_001L) // fires
+        assertEquals(1, firedCount)
+        assertEquals(AutoCaptureState.Idle, controller.state.value)
+
+        // Incoming stable frames while in-flight capture is processing
+        controller.onDetectionResult(makeResult(stableCorners()))
+        advanceTimeBy(1_000L)
+        assertEquals(AutoCaptureState.Idle, controller.state.value)
+        assertEquals(1, firedCount)
+
+        // After reset, countdown can start again
+        controller.reset()
+        controller.onDetectionResult(makeResult(stableCorners()))
+        advanceTimeBy(1L)
+        assertEquals(AutoCaptureState.Stable(3), controller.state.value)
+    }
+
     // -------------------------------------------------------------------------
     // maxCornerDrift
     // -------------------------------------------------------------------------

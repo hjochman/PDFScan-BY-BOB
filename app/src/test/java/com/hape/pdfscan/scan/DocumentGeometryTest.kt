@@ -48,20 +48,42 @@ class DocumentGeometryTest {
     }
 
     @Test
-    fun targetSize_usesLongerOppositeEdge() {
-        val c = DocumentCorners(
-            FloatPoint(0f, 0f), FloatPoint(100f, 0f), FloatPoint(120f, 200f), FloatPoint(0f, 180f)
-        )
-        val (w, h) = DocumentGeometry.targetSize(c)
-        assertEquals(122, w) // bottom edge length ~121.66 is longer than the top edge (100)
-        assertEquals(201, h) // right edge length ~200.998 is longer than the left edge (180)
+    fun estimateAspectRatio_axisAlignedRectangle() {
+        assertEquals(0.75f, DocumentGeometry.estimateAspectRatio(rect(300f, 400f)), 0.01f)
+        assertEquals(1.5f, DocumentGeometry.estimateAspectRatio(rect(600f, 400f)), 0.01f)
     }
 
     @Test
-    fun targetSize_isCappedAtMaxDimension() {
+    fun estimateAspectRatio_perspectiveTrapezoid_recoversTrueRatio() {
+        // Perspective view of a square (1:1) tilted backwards: top edge is shorter than bottom edge
+        val trapezoid = DocumentCorners(
+            topLeft = FloatPoint(200f, 100f),
+            topRight = FloatPoint(600f, 100f),    // top width = 400
+            bottomRight = FloatPoint(700f, 500f),
+            bottomLeft = FloatPoint(100f, 500f),   // bottom width = 600, height = 400
+        )
+        val ratio = DocumentGeometry.estimateAspectRatio(trapezoid)
+        // Perspective unprojection recovers close to 1.0 (square), whereas 2D average would be 500/400 = 1.25
+        assertTrue("Estimated ratio was $ratio, expected near 1.0", ratio in 0.85f..1.15f)
+    }
+
+    @Test
+    fun targetSize_isCappedAtMaxDimension_keepingAspectRatio() {
         val (w, h) = DocumentGeometry.targetSize(rect(5000f, 3000f), maxDimension = 2048)
         assertEquals(2048, w)
+        assertEquals(1229, h) // 3000 * 2048 / 5000 = 1228.8
+    }
+
+    @Test
+    fun targetSize_onlyOneSideAboveMax_keepsAspectRatio() {
+        val (w, h) = DocumentGeometry.targetSize(rect(1500f, 4096f), maxDimension = 2048)
+        assertEquals(750, w)
         assertEquals(2048, h)
+    }
+
+    @Test
+    fun targetSize_belowMax_isUnchanged() {
+        assertEquals(1000 to 2000, DocumentGeometry.targetSize(rect(1000f, 2000f), maxDimension = 2048))
     }
 
     // --- isConvex / isPlausibleQuad -----------------------------------------

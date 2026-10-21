@@ -1,7 +1,6 @@
 package com.hape.pdfscan.ui.scan
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -9,7 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.hape.pdfscan.pdf.PdfWriter
 import com.hape.pdfscan.scan.AutoCaptureController
 import com.hape.pdfscan.scan.AutoCaptureState
+import com.hape.pdfscan.scan.CornerSmoother
 import com.hape.pdfscan.scan.DetectionResult
+import com.hape.pdfscan.scan.DocumentCorners
+import com.hape.pdfscan.scan.FloatPoint
 import com.hape.pdfscan.storage.NameValidator
 import com.hape.pdfscan.storage.ScanFileRepository
 import com.hape.pdfscan.storage.ScanFolderSettings
@@ -30,11 +32,13 @@ private const val TAG = "ScanViewModel"
 
 /**
  * A single scanned page: the JPEG cache file and the in-memory bitmap.
- * The bitmap is kept alive so the page thumbnail can be shown without re-decoding.
+ * [rawFile] holds the uncropped original photo so the crop corners can be adjusted manually.
  */
 data class ScannedPage(
     val jpegFile: File,
     val bitmap: Bitmap,
+    val rawFile: File? = null,
+    val detectedCorners: DocumentCorners? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -47,8 +51,11 @@ sealed interface ScanUiState {
     /** Camera permission has not been granted yet. */
     data class PermissionDenied(val isPermanentlyDenied: Boolean) : ScanUiState
 
-    /** Camera is running; [latestDetection] is null before the first analysis frame. */
-    data class Scanning(val latestDetection: DetectionResult? = null) : ScanUiState
+    /** Camera is running; [latestDetection] is null before the first analysis frame. [isCapturing] is true while a photo is being processed. */
+    data class Scanning(
+        val latestDetection: DetectionResult? = null,
+        val isCapturing: Boolean = false,
+    ) : ScanUiState
 
     /**
      * A photo has been captured and cropped.
@@ -58,6 +65,16 @@ sealed interface ScanUiState {
     data class PagePreview(
         val newPage: ScannedPage,
         val pages: List<ScannedPage>,
+    ) : ScanUiState
+
+    /**
+     * Interactive manual crop adjustment on the full-resolution uncropped photo.
+     */
+    data class AdjustCrop(
+        val newPage: ScannedPage,
+        val pages: List<ScannedPage>,
+        val initialCorners: DocumentCorners,
+        val rawBitmap: Bitmap,
     ) : ScanUiState
 
     /**
@@ -114,7 +131,22 @@ class ScanViewModel(
 
     val autoCaptureState: StateFlow<AutoCaptureState> = autoCaptureController.state
 
+    /** Longest side of a cropped page in px; kept in sync with the persisted setting. */
+    @Volatile var maxDimension: Int = ScanFolderSettings.DEFAULT_MAX_DIMENSION
+        private set
+
+    /** JPEG quality (percent) of a cropped page; kept in sync with the persisted setting. */
+    @Volatile var jpegQuality: Int = ScanFolderSettings.DEFAULT_JPEG_QUALITY
+        private set
+
+    // Smoothing of the live overlay corners; strength 0..10 comes from the persisted setting.
+    private val cornerSmoother = CornerSmoother()
+
+    private val _smoothingStrength = MutableStateFlow(ScanFolderSettings.DEFAULT_SMOOTHING_STRENGTH)
+    val smoothingStrength: StateFlow<Int> = _smoothingStrength.asStateFlow()
+
     init {
+        cornerSmoother.strength = ScanFolderSettings.DEFAULT_SMOOTHING_STRENGTH
         // Keep the countdown duration in sync with the persisted setting
         if (folderSettings != null) {
             viewModelScope.launch {
@@ -123,7 +155,30 @@ class ScanViewModel(
                     if (seconds <= 0) autoCaptureController.reset()
                 }
             }
+            viewModelScope.launch {
+                folderSettings.maxDimension.collect { maxDimension = it }
+            }
+            viewModelScope.launch {
+                folderSettings.jpegQuality.collect { jpegQuality = it }
+            }
+            viewModelScope.launch {
+                folderSettings.smoothingStrength.collect { applySmoothingStrength(it) }
+            }
         }
+    }
+
+    /** Sets the smoothing strength (0..10) locally and persists it. */
+    fun onSmoothingStrengthChanged(strength: Int) {
+        applySmoothingStrength(strength)
+        val settings = folderSettings ?: return
+        val value = _smoothingStrength.value
+        viewModelScope.launch { settings.setSmoothingStrength(value) }
+    }
+
+    private fun applySmoothingStrength(strength: Int) {
+        val value = strength.coerceIn(CornerSmoother.MIN_STRENGTH, CornerSmoother.MAX_STRENGTH)
+        cornerSmoother.strength = value
+        _smoothingStrength.value = value
     }
 
     fun onDiagnostics(text: String) {
@@ -155,15 +210,31 @@ class ScanViewModel(
         // if we are still in Scanning state after the update (avoids a brief restart
         // of the countdown while the camera pipeline is still delivering frames
         // just before the PagePreview state becomes visible).
+        if (result.isFallback) cornerSmoother.reset()
+        val smoothed = if (result.isFallback) {
+            result
+        } else {
+            result.copy(
+                corners = cornerSmoother.smooth(result.corners, result.imageWidth, result.imageHeight),
+            )
+        }
         var wasScanning = false
         _uiState.update { current ->
             if (current is ScanUiState.Scanning) {
-                wasScanning = true
-                current.copy(latestDetection = result)
+                wasScanning = !current.isCapturing
+                current.copy(latestDetection = smoothed)
             } else current
         }
         if (wasScanning) {
-            autoCaptureController.onDetectionResult(result)
+            autoCaptureController.onDetectionResult(smoothed)
+        }
+    }
+
+    /** Called when photo capture begins. */
+    fun onCaptureStarted() {
+        autoCaptureController.reset()
+        _uiState.update { current ->
+            if (current is ScanUiState.Scanning) current.copy(isCapturing = true) else current
         }
     }
 
@@ -175,9 +246,15 @@ class ScanViewModel(
      * Called after successful photo capture + crop.
      * Adds the new page on top of any previously confirmed pages and shows [ScanUiState.PagePreview].
      */
-    fun onCaptureDone(croppedBitmap: Bitmap, tempFile: File) {
+    fun onCaptureDone(
+        croppedBitmap: Bitmap,
+        tempFile: File,
+        rawFile: File? = null,
+        detectedCorners: DocumentCorners? = null,
+    ) {
         autoCaptureController.reset()
-        val newPage = ScannedPage(tempFile, croppedBitmap)
+        cornerSmoother.reset()
+        val newPage = ScannedPage(tempFile, croppedBitmap, rawFile, detectedCorners)
         val existing = currentPages()
         _uiState.value = ScanUiState.PagePreview(newPage = newPage, pages = existing)
     }
@@ -185,6 +262,7 @@ class ScanViewModel(
     /** Called when the camera or capture pipeline signals an error. */
     fun onCameraError(messageRes: Int) {
         autoCaptureController.reset()
+        cornerSmoother.reset()
         _uiState.value = ScanUiState.Error(messageRes)
     }
 
@@ -198,6 +276,7 @@ class ScanViewModel(
      */
     fun onAddAnotherPage() {
         val state = _uiState.value as? ScanUiState.PagePreview ?: return
+        cornerSmoother.reset()
         _uiState.value = ScanUiState.Scanning(latestDetection = null)
         // Pages list now includes the confirmed page
         // (stored transitionally in the state; we carry them via the full list)
@@ -207,12 +286,89 @@ class ScanViewModel(
     }
 
     /**
+     * User opens the manual crop adjustment screen for the newly captured page.
+     */
+    fun onOpenCropAdjustment() {
+        val state = _uiState.value as? ScanUiState.PagePreview ?: return
+        val rawFile = state.newPage.rawFile ?: return
+        if (!rawFile.exists()) return
+        val initialCorners = state.newPage.detectedCorners
+        viewModelScope.launch(Dispatchers.IO) {
+            val rawBitmap = android.graphics.BitmapFactory.decodeFile(rawFile.absolutePath) ?: return@launch
+            val corners = initialCorners ?: DocumentCorners(
+                topLeft = com.hape.pdfscan.scan.FloatPoint(0.05f * rawBitmap.width, 0.05f * rawBitmap.height),
+                topRight = com.hape.pdfscan.scan.FloatPoint(0.95f * rawBitmap.width, 0.05f * rawBitmap.height),
+                bottomRight = com.hape.pdfscan.scan.FloatPoint(0.95f * rawBitmap.width, 0.95f * rawBitmap.height),
+                bottomLeft = com.hape.pdfscan.scan.FloatPoint(0.05f * rawBitmap.width, 0.95f * rawBitmap.height),
+            )
+            withContext(Dispatchers.Main) {
+                _uiState.value = ScanUiState.AdjustCrop(
+                    newPage = state.newPage,
+                    pages = state.pages,
+                    initialCorners = corners,
+                    rawBitmap = rawBitmap,
+                )
+            }
+        }
+    }
+
+    /**
+     * Applies the manually selected crop corners, re-crops the photo, and returns to preview.
+     */
+    fun onApplyCrop(newCorners: DocumentCorners) {
+        val state = _uiState.value as? ScanUiState.AdjustCrop ?: return
+        val rawFile = state.newPage.rawFile ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val fullPhoto = android.graphics.BitmapFactory.decodeFile(rawFile.absolutePath) ?: return@launch
+            val orderedCorners = com.hape.pdfscan.scan.DocumentGeometry.orderCorners(newCorners.toList())
+            val newCropped = try {
+                com.hape.pdfscan.scan.DocumentDetector.crop(fullPhoto, orderedCorners, maxDimension)
+            } finally {
+                fullPhoto.recycle()
+            }
+            if (newCropped == null) {
+                withContext(Dispatchers.Main) {
+                    _uiState.value = ScanUiState.PagePreview(newPage = state.newPage, pages = state.pages)
+                }
+                return@launch
+            }
+            val newTempFile = File(rawFile.parentFile, "scan_${System.currentTimeMillis()}.jpg")
+            java.io.FileOutputStream(newTempFile).use { out ->
+                newCropped.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
+            }
+            state.newPage.bitmap.recycle()
+            state.newPage.jpegFile.delete()
+            state.rawBitmap.recycle()
+
+            val updatedPage = state.newPage.copy(
+                jpegFile = newTempFile,
+                bitmap = newCropped,
+                detectedCorners = orderedCorners,
+            )
+            withContext(Dispatchers.Main) {
+                _uiState.value = ScanUiState.PagePreview(newPage = updatedPage, pages = state.pages)
+            }
+        }
+    }
+
+    /**
+     * Cancels manual crop adjustment and returns to the preview without changing the crop.
+     */
+    fun onCancelCrop() {
+        val state = _uiState.value as? ScanUiState.AdjustCrop ?: return
+        state.rawBitmap.recycle()
+        _uiState.value = ScanUiState.PagePreview(newPage = state.newPage, pages = state.pages)
+    }
+
+    /**
      * User discards the just-captured page and retakes it (camera restarts, page not added).
      */
     fun onDiscardPage() {
         val state = _uiState.value as? ScanUiState.PagePreview ?: return
         state.newPage.bitmap.recycle()
         state.newPage.jpegFile.delete()
+        state.newPage.rawFile?.delete()
+        cornerSmoother.reset()
         _uiState.value = ScanUiState.Scanning(latestDetection = null)
     }
 
@@ -272,17 +428,8 @@ class ScanViewModel(
                 }
                 // Ensure the target directory exists
                 targetDirectory.mkdirs()
-                // Load bitmaps from cache files if in-memory bitmaps were recycled
-                val bitmaps = pages.map { page ->
-                    if (!page.bitmap.isRecycled) page.bitmap
-                    else BitmapFactory.decodeFile(page.jpegFile.absolutePath)
-                }
-                if (bitmaps.any { it == null }) {
-                    return@withContext false
-                }
-                @Suppress("UNCHECKED_CAST")
-                PdfWriter.write(bitmaps as List<android.graphics.Bitmap>, target)
-                    .let { if (it) target else null }
+                // The cached JPEGs are embedded into the PDF as they are
+                if (PdfWriter.write(pages.map { it.jpegFile }, target)) target else false
             }
 
             when {
@@ -349,6 +496,7 @@ class ScanViewModel(
         for (page in pages) {
             try { page.bitmap.recycle() } catch (_: Exception) {}
             try { page.jpegFile.delete() } catch (_: Exception) {}
+            try { page.rawFile?.delete() } catch (_: Exception) {}
         }
     }
 
@@ -357,6 +505,10 @@ class ScanViewModel(
         // Clean up everything still in memory
         val state = _uiState.value
         when (state) {
+            is ScanUiState.AdjustCrop -> {
+                try { state.rawBitmap.recycle() } catch (_: Exception) {}
+                cleanupPages(state.pages + state.newPage)
+            }
             is ScanUiState.PagePreview -> {
                 cleanupPages(state.pages + state.newPage)
             }

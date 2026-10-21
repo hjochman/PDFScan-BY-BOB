@@ -27,7 +27,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "ScanCameraController"
-private const val JPEG_QUALITY = 90
 
 /**
  * Manages the CameraX lifecycle for the Scan screen.
@@ -123,6 +122,7 @@ class ScanCameraController(
             return
         }
         if (!capturing.compareAndSet(false, true)) return
+        viewModel.onCaptureStarted()
         viewModel.onDiagnostics("capture: gestartet")
 
         captureUseCase.takePicture(
@@ -187,10 +187,15 @@ class ScanCameraController(
                 viewModel.onCameraError(R.string.error_camera_capture)
                 return
             }
+            val rawFile = File(cacheDir, "raw_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(rawFile).use { out ->
+                photo.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            }
             // Re-detect on the full-resolution photo for a sharp crop
-            val cropped = try {
+            val (cropped, detectedCorners) = try {
                 val detection = DocumentDetector.detect(photo)
-                DocumentDetector.crop(photo, detection.corners)
+                val c = DocumentDetector.crop(photo, detection.corners, viewModel.maxDimension)
+                Pair(c, detection.corners)
             } finally {
                 photo.recycle()
             }
@@ -203,9 +208,14 @@ class ScanCameraController(
             )
             val tempFile = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
             FileOutputStream(tempFile).use { out ->
-                cropped.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+                cropped.compress(Bitmap.CompressFormat.JPEG, viewModel.jpegQuality, out)
             }
-            viewModel.onCaptureDone(cropped, tempFile)
+            viewModel.onCaptureDone(
+                croppedBitmap = cropped,
+                tempFile = tempFile,
+                rawFile = rawFile,
+                detectedCorners = detectedCorners,
+            )
         } catch (t: Throwable) {
             Log.e(TAG, "Post-capture processing failed: ${t.javaClass.simpleName}: ${t.message}")
             viewModel.onDiagnostics("Capture-Fehler: ${t.javaClass.simpleName}")

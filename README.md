@@ -134,5 +134,12 @@ java -jar uber-apk-signer.jar \
 
 ## Speicherort
 
-Standard: `/storage/emulated/0/Scans`  
+Standard: `/storage/emulated/0/Scans`
 Änderbar unter **Einstellungen → Scan-Ordner**.
+
+## Lizenz
+
+GPL-3.0-or-later, Copyright (C) 2025 hjochman.
+
+Dieses Programm ist freie Software; die Lizenzbedingungen stehen in der Datei [`LICENSE`](LICENSE).
+Quellcode: <https://github.com/hjochman/PDFScan-BY-BOB>

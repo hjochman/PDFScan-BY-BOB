@@ -57,6 +57,7 @@ class AutoCaptureController(
     val state: StateFlow<AutoCaptureState> = _state.asStateFlow()
 
     @Volatile private var lastStableCorners: DocumentCorners? = null
+    @Volatile private var hasFired = false
     private var countdownJob: Job? = null
 
     /**
@@ -64,6 +65,7 @@ class AutoCaptureController(
      * Fallback detections (full-frame) never start the countdown.
      */
     fun onDetectionResult(result: DetectionResult) {
+        if (hasFired) return
         // Auto-capture disabled when countdownSeconds == 0
         if (countdownSeconds <= 0) {
             reset()
@@ -97,6 +99,7 @@ class AutoCaptureController(
         countdownJob?.cancel()
         countdownJob = null
         lastStableCorners = null
+        hasFired = false
         _state.value = AutoCaptureState.Idle
     }
 
@@ -109,6 +112,7 @@ class AutoCaptureController(
                 _state.value = AutoCaptureState.Stable(remaining)
                 delay(tickMs)
             }
+            hasFired = true
             _state.value = AutoCaptureState.Idle
             onFire()
         }
