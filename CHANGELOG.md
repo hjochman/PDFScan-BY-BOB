@@ -4,9 +4,11 @@ Alle relevanten Änderungen werden in dieser Datei dokumentiert.
 Format: [Keep a Changelog](https://keepachangelog.com/de/1.1.0/)
 Versionierung: [Semantic Versioning](https://semver.org/lang/de/)
 
-## [Unreleased]
+## [1.1.0] - 2026-10-21
 
-## [1.1.0] – 2026-10-21
+- Randglättung mit Regler in der Scanansicht
+- Seitenzahl x/y in der TopAppBar des Viewers
+- Lizenzhinweis (GPL-3.0-or-later, Copyright © 2025 hjochman) im About-Screen; `LICENSE`-Datei; GitHub-Link## [1.1.0] – 2026-10-21
 
 ### Fixed
 - Seitenverhältnis beim Beschnitt bleibt exakt erhalten: 3D-Perspektiv-Homographie (`estimateAspectRatio()`) und einheitliche Skalierung (`targetSize()`) verhindern Verzerrungen bei schrägen Aufnahmen
@@ -20,11 +22,9 @@ Versionierung: [Semantic Versioning](https://semver.org/lang/de/)
 - Interaktiver manueller Zuschnitt: Ecken können nach der Aufnahme per Touch verschoben oder zurückgesetzt werden
 - "Foto wird verarbeitet…"-Fortschrittsanzeige während der Aufnahmeverarbeitung
 - Einstellungen für PDF-Auflösung (1200–3000 px) und JPEG-Qualität (50–95 %) in den Settings
-- Randglättung mit Regler in der Scanansicht
-- Seitenzahl x/y in der TopAppBar des Viewers
-- Lizenzhinweis (GPL-3.0-or-later, Copyright © 2025 hjochman) im About-Screen; `LICENSE`-Datei; GitHub-Link
 
-## [1.0.0] – 2025-01-01
+
+## [1.0.0] – 2026-10-20
 
 ### Added
 - Kamera-Scan mit Live-Kantenerkennung und Perspektivkorrektur (OpenCV 5, CameraX)
