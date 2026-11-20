@@ -125,6 +125,9 @@
     <string name="settings_resolution_value">Resolution: %1$d px (longest side)</string>
     <string name="settings_quality_value">JPEG quality: %1$d %%</string>
     <string name="settings_pdf_size_hint">Lower values give smaller PDFs. Applies to new scans only.</string>
+    <string name="settings_section_developer">Developer (debug build only)</string>
+    <string name="settings_candidate_overlay">Show candidate quads</string>
+    <string name="settings_candidate_overlay_hint">Draws the three best candidates of the edge detection in the scan view (yellow, red, green). For troubleshooting only.</string>
 
     <string name="error_settings_folder_invalid">The selected folder is invalid or not accessible.</string>
     <string name="error_settings_folder_not_internal">The scan folder must be on internal storage.</string>
@@ -137,8 +140,8 @@
 
     <!-- About -->
     <string name="about_version">Version %1$s</string>
-    <string name="about_whats_new_title">What\'s new in Version 1.1.0</string>
-    <string name="about_whats_new_content">• Manual crop: interactively adjust or reset document corners after capture\n• Improved perspective correction (3D homography) without distortion\n• More robust edge detection on complex backgrounds\n• Configurable PDF resolution (1200–3000 px) &amp; JPEG quality in Settings\n• Edge smoothing slider in the scan view\n• Page number indicator in PDF viewer</string>
+    <string name="about_whats_new_title">What\'s new in Version 1.1.1</string>
+    <string name="about_whats_new_content">• More stable edge detection on busy backgrounds (stone, wood, patterns): the frame stays on the page\n• Auto-capture triggers more reliably, even when the phone is held at an angle</string>
     <string name="about_description">PDFScan by Bob scans documents using the device camera. The app automatically detects page edges, corrects the perspective and saves multiple pages as a single PDF file.\n\nPDFs are stored directly in the configurable scan folder on internal storage and can be shared, renamed, copied or moved within the app.</string>
     <string name="about_license">Free software under the GNU General Public License v3.0 or later. Copyright © 2025 hjochman. This program is distributed without any warranty.</string>
     <string name="about_source_link">Source code on GitHub</string>

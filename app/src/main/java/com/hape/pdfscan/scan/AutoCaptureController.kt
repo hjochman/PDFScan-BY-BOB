@@ -32,7 +32,8 @@ sealed interface AutoCaptureState {
  * Determines whether successive detection results are stable enough for auto-capture.
  *
  * Stability criterion: the maximum displacement of any corner between the two most recent
- * non-fallback frames is below [maxDriftPx] pixels (in analysis-frame coordinates).
+ * non-fallback frames is at most [maxDriftFraction] of the image diagonal of the current frame
+ * (so it does not depend on the analysis-frame size).
  *
  * The countdown duration and tick interval are injected so they can be replaced in tests.
  *
@@ -46,10 +47,11 @@ class AutoCaptureController(
     /** How often the countdown ticks, in milliseconds. */
     val tickMs: Long = 1_000L,
     /**
-     * Maximum allowed displacement (in pixels, analysis-frame space) for any single
-     * corner between two consecutive stable frames.
+     * Maximum allowed displacement for any single corner between two consecutive stable
+     * frames, as a fraction of the image diagonal. 0.01 corresponds to about 15 px
+     * (14.7 px) for 1280x720 analysis frames.
      */
-    val maxDriftPx: Float = 15f,
+    val maxDriftFraction: Float = DEFAULT_MAX_DRIFT_FRACTION,
     /** Called on the coroutine scope when the countdown completes. */
     val onFire: () -> Unit,
 ) {
@@ -80,6 +82,7 @@ class AutoCaptureController(
         val curr = result.corners
         lastStableCorners = curr
 
+        val maxDriftPx = maxDriftFraction * hypot(result.imageWidth.toFloat(), result.imageHeight.toFloat())
         val isStable = prev == null || maxCornerDrift(prev, curr) <= maxDriftPx
 
         if (isStable) {
@@ -119,6 +122,9 @@ class AutoCaptureController(
     }
 
     companion object {
+        /** Default for [maxDriftFraction]: about 15 px at 1280x720 (diagonal 1468.6 px). */
+        const val DEFAULT_MAX_DRIFT_FRACTION = 0.01f
+
         /** Maximum displacement of any corner between two frames (Euclidean distance). */
         fun maxCornerDrift(a: DocumentCorners, b: DocumentCorners): Float {
             return listOf(

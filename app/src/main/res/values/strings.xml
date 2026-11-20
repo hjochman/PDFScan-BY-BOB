@@ -125,6 +125,9 @@
     <string name="settings_resolution_value">Auflösung: %1$d px (längste Seite)</string>
     <string name="settings_quality_value">JPEG-Qualität: %1$d %%</string>
     <string name="settings_pdf_size_hint">Niedrigere Werte ergeben kleinere PDFs. Gilt nur für neue Scans.</string>
+    <string name="settings_section_developer">Entwickler (nur Debug-Build)</string>
+    <string name="settings_candidate_overlay">Kandidaten-Vierecke anzeigen</string>
+    <string name="settings_candidate_overlay_hint">Zeichnet in der Scanansicht die drei besten Kandidaten der Kantenerkennung farbig ein (gelb, rot, grün). Nur zur Fehlersuche.</string>
 
     <string name="error_settings_folder_invalid">Der gewählte Ordner ist ungültig oder nicht erreichbar.</string>
     <string name="error_settings_folder_not_internal">Der Scan-Ordner muss im internen Speicher liegen.</string>
@@ -137,8 +140,8 @@
 
     <!-- About -->
     <string name="about_version">Version %1$s</string>
-    <string name="about_whats_new_title">Neu in Version 1.1.0</string>
-    <string name="about_whats_new_content">• Manueller Zuschnitt: Eckpunkte nach der Aufnahme interaktiv anpassen oder zurücksetzen\n• Verbesserte Perspektivkorrektur (3D-Homographie) ohne Bildverzerrung\n• Zuverlässigere Kantenerkennung auch bei schwierigen Kontrasten\n• Einstellbare PDF-Auflösung (1200–3000 px) &amp; JPEG-Qualität in den Einstellungen\n• Randglättung mit Live-Regler in der Scanansicht\n• Seitenzahlanzeige im PDF-Betrachter</string>
+    <string name="about_whats_new_title">Neu in Version 1.1.1</string>
+    <string name="about_whats_new_content">• Stabilere Kantenerkennung auf unruhigem Untergrund (Stein, Holz, Muster): der Rahmen bleibt auf dem Blatt\n• Automatische Aufnahme löst zuverlässiger aus, auch bei schräg gehaltenem Handy</string>
     <string name="about_description">PDFScan by Bob scannt Dokumente mit der Gerätekamera. Die App erkennt automatisch Blattränder, korrigiert die Perspektive und speichert mehrere Seiten als eine PDF-Datei.\n\nDie PDFs werden direkt im konfigurierbaren Scan-Ordner im internen Speicher gespeichert und können über die App geteilt, umbenannt, kopiert oder verschoben werden.</string>
     <string name="about_license">Freie Software unter der GNU General Public License v3.0 oder später. Copyright © 2025 hjochman. Dieses Programm wird ohne jede Gewährleistung verteilt.</string>
     <string name="about_source_link">Quellcode auf GitHub</string>

@@ -145,6 +145,10 @@ class ScanViewModel(
     private val _smoothingStrength = MutableStateFlow(ScanFolderSettings.DEFAULT_SMOOTHING_STRENGTH)
     val smoothingStrength: StateFlow<Int> = _smoothingStrength.asStateFlow()
 
+    // Debug option (Settings, debug builds only): draw the coloured candidate quads.
+    private val _showCandidateOverlay = MutableStateFlow(ScanFolderSettings.DEFAULT_SHOW_CANDIDATE_OVERLAY)
+    val showCandidateOverlay: StateFlow<Boolean> = _showCandidateOverlay.asStateFlow()
+
     init {
         cornerSmoother.strength = ScanFolderSettings.DEFAULT_SMOOTHING_STRENGTH
         // Keep the countdown duration in sync with the persisted setting
@@ -163,6 +167,9 @@ class ScanViewModel(
             }
             viewModelScope.launch {
                 folderSettings.smoothingStrength.collect { applySmoothingStrength(it) }
+            }
+            viewModelScope.launch {
+                folderSettings.showCandidateOverlay.collect { _showCandidateOverlay.value = it }
             }
         }
     }

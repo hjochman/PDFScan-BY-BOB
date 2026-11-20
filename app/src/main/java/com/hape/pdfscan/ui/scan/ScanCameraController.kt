@@ -17,7 +17,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.hape.pdfscan.BuildConfig
 import com.hape.pdfscan.R
+import com.hape.pdfscan.scan.DetectionStats
 import com.hape.pdfscan.scan.DocumentDetector
 import com.hape.pdfscan.scan.initOpenCv
 import java.io.File
@@ -27,6 +29,22 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "ScanCameraController"
+private const val STATS_TAG = "EdgeStats"
+private const val CAND_TAG = "EdgeCand"
+
+/**
+ * One line per frame with the top candidates: rank, mask, score, area fraction, edge support
+ * and the four corners as fractions (0..1) of the image size. Numbers only.
+ */
+private fun candidateLog(result: com.hape.pdfscan.scan.DetectionResult): String {
+    val w = result.imageWidth.toFloat()
+    val h = result.imageHeight.toFloat()
+    return result.topCandidates.mapIndexed { i, c ->
+        val pts = c.corners.toList().joinToString(",") { "%.2f/%.2f".format(it.x / w, it.y / h) }
+        "c${i + 1}[m=${c.maskIndex} s=${"%.2f".format(c.score)} a=${"%.2f".format(c.areaFraction)} " +
+            "e=${"%.2f".format(c.edgeSupport)} $pts]"
+    }.joinToString(" ")
+}
 
 /**
  * Manages the CameraX lifecycle for the Scan screen.
@@ -53,9 +71,11 @@ class ScanCameraController(
         initOpenCv().also { viewModel.onDiagnostics("OpenCV ready=$it") }
     }
     private var frameCount = 0
+    private val detectionStats = DetectionStats()
 
     fun bindCamera(previewView: PreviewView, lifecycleOwner: LifecycleOwner) {
         analysisExecutor?.shutdown()
+        detectionStats.reset()
         val executor = Executors.newSingleThreadExecutor().also { analysisExecutor = it }
 
         val providerFuture = ProcessCameraProvider.getInstance(context)
@@ -159,10 +179,27 @@ class ScanCameraController(
             try {
                 val result = DocumentDetector.detect(bitmap)
                 viewModel.onDetectionResult(result)
+                val stats = detectionStats.add(result)
+                if (BuildConfig.DEBUG) {
+                    // Numbers only, no paths or file names
+                    Log.d(
+                        STATS_TAG,
+                        "mask=${result.winnerMask} score=${"%.3f".format(result.winnerScore)} " +
+                            "cand=${result.candidateCount} fb=${result.isFallback} " +
+                            "jumps=${stats.jumps} drop=${stats.dropouts} " +
+                            "meanDrift=${"%.1f".format(stats.meanDrift)} " +
+                            "maxDrift=${"%.1f".format(stats.maxDrift)} " +
+                            "n=${stats.frames} ${result.durationMs}ms"
+                    )
+                    Log.d(CAND_TAG, candidateLog(result))
+                }
                 if (++frameCount % 5 == 1) {
                     viewModel.onDiagnostics(
                         "Frame ${bitmap.width}x${bitmap.height} Stufe=${result.stage} " +
-                            "fallback=${result.isFallback} ${result.durationMs}ms"
+                            "fallback=${result.isFallback} ${result.durationMs}ms " +
+                            "mask=${result.winnerMask} cand=${result.candidateCount} " +
+                            "Spruenge=${stats.jumps}/${stats.frames} Aussetzer=${stats.dropouts}/${stats.frames} " +
+                            "Drift=${"%.1f".format(stats.meanDrift)}/${"%.1f".format(stats.maxDrift)}px"
                     )
                 }
             } finally {

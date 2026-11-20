@@ -102,7 +102,7 @@ Plattform: Android, Kotlin, Jetpack Compose, minSdk 29, targetSdk 35. Strings in
 | PDF-Speichern | `ui/scan/ScanViewModel.kt` – `onSavePdf()` |
 | Beschnitt / Zielgröße | `scan/DocumentGeometry.kt` – `targetSize()`; `scan/DocumentDetector.kt` – `cropMat()` |
 | Kantenerkennung | `scan/DocumentDetector.kt` – `detect()`, Stufe 1 (Canny) und Stufe 2 (robust). Analyse-Frame max. 1000 px lange Kante |
-| Stabilität / Auto-Auslöser | `scan/AutoCaptureController.kt` – Drift max. 15 px, Tick 1 s. Eckenglättung: `scan/CornerSmoother.kt` (aufgerufen in `ScanViewModel.onDetectionResult`, Stärke 0..10 aus `ScanFolderSettings.smoothingStrength`, Regler in `CameraPreviewContent`) |
+| Stabilität / Auto-Auslöser | `scan/AutoCaptureController.kt` – Drift max. 1 % der Bilddiagonale (ca. 15 px bei 1280x720), Tick 1 s. Eckenglättung: `scan/CornerSmoother.kt` (aufgerufen in `ScanViewModel.onDetectionResult`, Stärke 0..10 aus `ScanFolderSettings.smoothingStrength`, Regler in `CameraPreviewContent`) |
 | Live-Overlay | `ui/scan/ScanScreen.kt` – `DocumentOverlay`, `CameraPreviewContent`, `PagePreviewContent` |
 | Kamera | `ui/scan/ScanCameraController.kt` – CameraX, Analyse 1280x720 |
 | Einstellungen speichern | `storage/ScanFolderSettings.kt` – DataStore `settings`, Muster: Key, Flow, Setter (siehe `countdownSeconds`) |
@@ -116,7 +116,7 @@ Plattform: Android, Kotlin, Jetpack Compose, minSdk 29, targetSdk 35. Strings in
 Detailplan mit Sub-Tasks: [`improvements-plan.md`](improvements-plan.md).
 
 1. PDFs zu groß: Behoben. `PdfWriter` bettet die Cache-JPGs jetzt unverändert als DCTDecode ein; Auflösung (1200–3000 px) und JPEG-Qualität (50–95 %) sind in den Settings einstellbar. Offen: Reale Dateigröße und Anzeige in anderen PDF-Programmen am Gerät prüfen.
-2. Rand springt: Behoben. `scan/CornerSmoother.kt` glättet die Ecken exponentiell (Reset bei großem Sprung und `isFallback`), Regler "Randglättung" in der Scanansicht (Default 5, persistiert); Test `CornerSmootherTest`. Offen: Wirkung am Gerät prüfen, ggf. Schwelle/Default anpassen.
+2. Rand springt: Behoben. `scan/CornerSmoother.kt` glättet die Ecken exponentiell (Reset bei großem Sprung und `isFallback`), Regler "Randglättung" in der Scanansicht (Default 5, persistiert); Test `CornerSmootherTest`. Zusätzlich (2026-11-20, Details in `edge-stability-plan.md`): Das Springen auf unruhigem Untergrund kam von der Kandidatenbewertung, nicht von der Glättung. `DocumentGeometry.quadScore` straft Vierecke mit Ecken am Bildrand ab und bewertet die Größe flacher. Am Gerät bestätigt: 0 Sprünge, mittlere Drift 1,8 px, Auto-Capture löst auf verschiedenen Untergründen und bei schräg gehaltenem Handy aus. Debug-Diagnose siehe Abschnitt „Kantenerkennung debuggen“.
 3. Viewer: Seitenzahl "x/y" in der `TopAppBar`. Behoben: `rememberPagerState` auf Screen-Ebene hochgezogen; Titel zeigt im Zustand `Ready` Dateiname + Seitenzahl ("x/y") in einer `Column`; Einzelseiten zeigen "1/1".
 4. Lizenz: Behoben. `LICENSE` (GPL-3.0-or-later, offizieller GNU-Text), README-Abschnitt, Strings und About-Screen-Hinweis mit GitHub-Link eingefügt. Abhängigkeiten geprüft: alle Apache 2.0 / EPL – GPL-kompatibel.
 5. Bilder gestaucht: `targetSize()` begrenzte Breite und Höhe unabhängig voneinander (`coerceIn`). Behoben (gemeinsamer Skalierungsfaktor, Tests ergänzt). Offen: Ob Overlay und Beschnitt am Gerät noch voneinander abweichen, zusammen mit Punkt 2 prüfen.
@@ -136,8 +136,25 @@ adb exec-out screencap -p > .bob/tmp/shot.png \
 - `read_file` darf nur Pfade im Workspace lesen. Deshalb liegen Screenshots in `.bob/tmp/` (nicht in `/tmp`). `.bob/` steht in `.gitignore`.
 - `adb` liegt unter `/opt/homebrew/bin/adb`. Mit `adb devices -l` prüfen, ob das Gerät erreichbar ist. Es trennt sich gelegentlich.
 - Debug- und Release-APK sind unterschiedlich signiert. Wechsel zwischen beiden scheitert mit `INSTALL_FAILED_UPDATE_INCOMPATIBLE` und braucht eine Deinstallation (App-Daten gehen dann verloren). Ob ein Downgrade (ältere über neuere Version) mit `adb install -r -d` klappt, ist nicht geprüft.
-- `run-as` und die Diagnosezeile in der Scanansicht gibt es nur bei Debug-Builds.
+- `run-as`, die Diagnosezeile und die Kandidatenlinien (zusätzlich per Schalter in den Einstellungen) gibt es nur bei Debug-Builds.
 - Bei Scan-Problemen zuerst Logcat prüfen: `adb logcat -d | grep -iE "pdfscan|opencv|AndroidRuntime"`. Logs dürfen keine Pfade oder Dateinamen enthalten (siehe Sicherheitsregeln).
+
+## Kantenerkennung debuggen (nur Debug-Build)
+
+Wenn die Kantenerkennung wieder springt oder das falsche Viereck wählt:
+
+1. **Kandidatenlinien einschalten:** Debug-APK installieren, in der App Einstellungen öffnen, Abschnitt „Entwickler (nur Debug-Build)“, Schalter „Kandidaten-Vierecke anzeigen“. Standard ist aus, damit die Linien im täglichen Gebrauch nicht stören. Der Abschnitt und die Linien gibt es im Release-Build nicht.
+2. **Farben in der Scanansicht:** Blau gefüllt = gewählter Rahmen. Dünne Linien = Top-Kandidaten: 1 gelb (Gewinner), 2 rot, 3 grün. Gibt es unter den Top 3 kein Viereck unter 50 % der Bildfläche, hängt die Diagnose das beste kleine Viereck als letzten Eintrag an.
+3. **Diagnosezeile oben links:** `mask` (Gewinner-Maske: 0 geschlossene Kanten, 1 geschlossene empfindliche Kanten, 2 Otsu, 3 Otsu invers, 4 dilatierte Kanten), `cand` (Kandidatenzahl), `Spruenge`, `Aussetzer`, `Drift` (mittel/max in px), jeweils über 30 Frames.
+4. **Logcat** (nur Zahlen, keine Pfade):
+   - `EdgeStats`: pro Frame `mask`, `score`, `cand`, `fb` (Fallback), `jumps`, `drop`, `meanDrift`, `maxDrift`, `n`, Dauer.
+   - `EdgeCand`: pro Frame bis zu vier Kandidaten `cN[m=Maske s=Score a=Flächenanteil e=Kantenstütze x/y,x/y,x/y,x/y]`, Ecken als Anteil 0..1 der Bildgröße (Reihenfolge: links oben, rechts oben, rechts unten, links unten).
+   - Aufzeichnen: `adb logcat -c`, 10 bis 15 s scannen, dann `adb logcat -d | grep -E "EdgeStats|EdgeCand" > .bob/tmp/x.log`. Auswertung mit `.bob/tmp/stats.py <log>` (falls vorhanden; sonst kleines Python-Skript).
+5. **Typische Befunde:** Gewinner belegt fast das ganze Bild und die Ecken liegen am Rand (0,00 oder 1,00), dann wählt `DocumentGeometry.quadScore` die Szene statt des Blatts (Randabzug und Größenbonus prüfen). Gewinner wechselt zwischen mehreren ähnlichen Scores, dann fehlt Abstand zwischen den Kandidaten.
+6. **Messwerte nach dem Fix (1.1.1):** unruhiger Untergrund, Handy ruhig: 0 Sprünge pro 30 Frames, mittlere Drift 1,8 px, Auto-Capture löst aus. Als Vergleich vorher: 23 bis 27 Sprünge, 130 bis 200 px.
+7. **Gerät:** Die Einstellung liegt im DataStore unter dem Schlüssel `debug_show_candidate_overlay` (Boolean). Der Schalter wirkt sofort, ein Neustart der App ist nicht nötig.
+
+Der ganze Verlauf mit Messwerten steht in [`edge-stability-plan.md`](edge-stability-plan.md).
 
 ## Arbeiten mit Subagents und Edits
 

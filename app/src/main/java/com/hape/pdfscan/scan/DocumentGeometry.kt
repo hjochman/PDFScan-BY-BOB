@@ -1,6 +1,7 @@
 package com.hape.pdfscan.scan
 
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -13,32 +14,50 @@ import kotlin.math.roundToInt
 object DocumentGeometry {
 
     /**
-     * Orders four unordered points as top-left, top-right, bottom-right, bottom-left.
+     * The single corner ordering function: orders four unordered points as
+     * top-left, top-right, bottom-right, bottom-left.
      *
      * Algorithm:
-     * 1. Sort by y (ascending). The two with the smallest y are the "top" pair;
-     *    the two with the largest y are the "bottom" pair.
-     * 2. Within each pair the one with the smaller x is left.
+     * 1. Sort the points clockwise (on screen, y down) by their angle around the centroid.
+     * 2. Start at the point with the smallest x + y (ties: smaller y, then smaller x).
      *
-     * This works for any convex quadrilateral that has a clear top/bottom
-     * separation.  For perfectly horizontal edges (same y) the x-sort resolves ties.
+     * The result is a permutation of the input and independent of the input order,
+     * also for quadrilaterals rotated by 30..60 degrees or exactly 45 degrees,
+     * where a y-based sort or an independent min/max selection becomes ambiguous.
      */
     fun orderCorners(points: List<FloatPoint>): DocumentCorners {
         require(points.size == 4) { "Exactly 4 points required, got ${points.size}" }
-        val sorted = points.sortedWith(compareBy({ it.y }, { it.x }))
-        // Top two: sorted[0], sorted[1]  — order left/right by x
-        val (topLeft, topRight) = if (sorted[0].x <= sorted[1].x) {
-            sorted[0] to sorted[1]
-        } else {
-            sorted[1] to sorted[0]
-        }
-        // Bottom two: sorted[2], sorted[3] — order left/right by x
-        val (bottomLeft, bottomRight) = if (sorted[2].x <= sorted[3].x) {
-            sorted[2] to sorted[3]
-        } else {
-            sorted[3] to sorted[2]
-        }
-        return DocumentCorners(topLeft, topRight, bottomRight, bottomLeft)
+        val cx = points.sumOf { it.x.toDouble() } / 4.0
+        val cy = points.sumOf { it.y.toDouble() } / 4.0
+        val clockwise = points.sortedWith(
+            compareBy<FloatPoint> { atan2(it.y - cy, it.x - cx) }.thenBy { it.y }.thenBy { it.x },
+        )
+        val start = clockwise.indices.minWithOrNull(
+            compareBy<Int> { clockwise[it].x + clockwise[it].y }
+                .thenBy { clockwise[it].y }
+                .thenBy { clockwise[it].x },
+        ) ?: 0
+        return DocumentCorners(
+            clockwise[start],
+            clockwise[(start + 1) % 4],
+            clockwise[(start + 2) % 4],
+            clockwise[(start + 3) % 4],
+        )
+    }
+
+    /**
+     * Reduces 4 to 12 polygon points to a quadrilateral and orders it with [orderCorners].
+     * With exactly 4 points the points are ordered directly; with more points the extremes of
+     * x + y and x - y are taken as the four corners.
+     */
+    fun cornersFromPoints(points: List<FloatPoint>): DocumentCorners {
+        require(points.size >= 4) { "At least 4 points required, got ${points.size}" }
+        if (points.size == 4) return orderCorners(points)
+        val tl = points.minBy { it.x + it.y }
+        val br = points.maxBy { it.x + it.y }
+        val tr = points.maxBy { it.x - it.y }
+        val bl = points.minBy { it.x - it.y }
+        return orderCorners(listOf(tl, tr, br, bl))
     }
 
     /**
@@ -275,19 +294,57 @@ object DocumentGeometry {
     }
 
     /**
+     * Number of corners of [corners] that lie within [marginFraction] × the shorter image side
+     * of the image border. A quad whose corners stick to the border is usually the frame of the
+     * scene (table edge, background), not a page.
+     */
+    fun cornersOnBorder(
+        corners: DocumentCorners,
+        imageWidth: Int,
+        imageHeight: Int,
+        marginFraction: Float = BORDER_MARGIN_FRACTION,
+    ): Int {
+        val margin = marginFraction * min(imageWidth, imageHeight)
+        return corners.toList().count { p ->
+            p.x <= margin || p.y <= margin || p.x >= imageWidth - margin || p.y >= imageHeight - margin
+        }
+    }
+
+    /**
      * Ranks a quadrilateral candidate: prefers clear edge support and plausible document size,
      * with a bonus for filled contour blobs when available.
+     *
+     * The size bonus is deliberately flat (0.6 at a tiny quad, 1.0 at the full frame), so that a
+     * page filling a quarter of the image is not outranked by a huge quad over the whole scene.
+     * Each corner on the image border ([cornersOnBorder]) multiplies the score by
+     * [BORDER_CORNER_PENALTY].
      */
-    fun quadScore(quadArea: Double, frameArea: Double, contourArea: Double = 0.0, edgeSupport: Float): Double {
+    fun quadScore(
+        quadArea: Double,
+        frameArea: Double,
+        contourArea: Double = 0.0,
+        edgeSupport: Float,
+        cornersOnBorder: Int = 0,
+    ): Double {
         if (quadArea <= 0.0 || frameArea <= 0.0 || edgeSupport < MIN_EDGE_SUPPORT) return 0.0
-        val sizeFactor = kotlin.math.sqrt(quadArea / frameArea).coerceIn(0.1, 1.0)
+        val sizeFactor = SIZE_FLOOR + (1.0 - SIZE_FLOOR) * kotlin.math.sqrt(quadArea / frameArea).coerceIn(0.0, 1.0)
         val fillFactor = if (contourArea > 0.0) {
             (0.6 + 0.4 * min(1.0, contourArea / quadArea)).toFloat()
         } else {
             0.8f
         }
-        return sizeFactor * fillFactor * edgeSupport
+        val borderFactor = Math.pow(BORDER_CORNER_PENALTY, cornersOnBorder.coerceIn(0, 4).toDouble())
+        return sizeFactor * fillFactor * edgeSupport * borderFactor
     }
+
+    /** Distance from the image border (fraction of the shorter side) that counts as "on the border". */
+    const val BORDER_MARGIN_FRACTION = 0.02f
+
+    /** Score factor per corner on the image border. */
+    const val BORDER_CORNER_PENALTY = 0.5
+
+    /** Size factor of a vanishingly small quad; the full frame gets 1.0. */
+    const val SIZE_FLOOR = 0.6
 
     /** Area of the quadrilateral (shoelace formula). */
     fun area(corners: DocumentCorners): Double = quadArea(corners)

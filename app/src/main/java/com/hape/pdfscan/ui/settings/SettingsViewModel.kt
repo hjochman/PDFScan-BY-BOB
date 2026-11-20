@@ -34,6 +34,8 @@ data class SettingsUiState(
     val maxDimension: Int = ScanFolderSettings.DEFAULT_MAX_DIMENSION,
     /** JPEG quality of a scanned page in percent. */
     val jpegQuality: Int = ScanFolderSettings.DEFAULT_JPEG_QUALITY,
+    /** Debug: draw the coloured candidate quads in the scan preview (debug builds only). */
+    val showCandidateOverlay: Boolean = ScanFolderSettings.DEFAULT_SHOW_CANDIDATE_OVERLAY,
 )
 
 data class FolderPickerUiState(
@@ -75,6 +77,16 @@ class SettingsViewModel(
                 _uiState.update { it.copy(jpegQuality = percent) }
             }
         }
+        viewModelScope.launch {
+            folderSettings.showCandidateOverlay.collect { show ->
+                _uiState.update { it.copy(showCandidateOverlay = show) }
+            }
+        }
+    }
+
+    fun onShowCandidateOverlayChanged(show: Boolean) {
+        _uiState.update { it.copy(showCandidateOverlay = show) }
+        viewModelScope.launch { folderSettings.setShowCandidateOverlay(show) }
     }
 
     fun onMaxDimensionChanged(pixels: Int) {

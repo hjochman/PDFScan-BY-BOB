@@ -24,7 +24,7 @@ android {
         applicationId = "com.hape.pdfscan"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         versionName = versionNameFromFile
 
         // No emulator support: package only ARM native libs (drops x86/x86_64 from OpenCV etc.)

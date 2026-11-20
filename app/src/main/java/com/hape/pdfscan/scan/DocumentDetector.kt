@@ -15,6 +15,7 @@ import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.geometry.Geometry
 import org.opencv.imgproc.Imgproc
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -28,6 +29,12 @@ private const val ROBUST_MIN_AREA_FRACTION = 0.05f
 
 /** Number of largest contours per mask that the robust stage turns into quad candidates. */
 private const val ROBUST_TOP_CONTOURS = 16
+
+/** Number of distinct best candidates reported for diagnostics. */
+private const val TOP_CANDIDATES = 3
+
+/** Candidates below this area fraction count as "page-sized" in the diagnostics. */
+private const val SMALL_CANDIDATE_FRACTION = 0.5f
 
 /**
  * Initialises the OpenCV native library (libopencv_java5.so).
@@ -56,6 +63,11 @@ fun initOpenCv(): Boolean {
  * detection time (used by Sub-Task 5 for stability measurement).
  * [stage] tells which detection stage found the page: 1 = plain edges, 2 = robust stage,
  * 0 = nothing found. [durationMs] is the time the detection took.
+ *
+ * Diagnostics (measurement only, no influence on detection): [winnerMask] is the index of the
+ * mask the winning candidate came from (0 closed edges, 1 closed sensitive edges, 2 Otsu,
+ * 3 inverse Otsu, 4 dilated edges; -1 if nothing found), [winnerScore] its quad score and
+ * [candidateCount] the number of candidates evaluated.
  */
 data class DetectionResult(
     val corners: DocumentCorners,
@@ -65,6 +77,23 @@ data class DetectionResult(
     val imageHeight: Int,
     val stage: Int = 0,
     val durationMs: Long = 0,
+    val winnerMask: Int = -1,
+    val winnerScore: Double = 0.0,
+    val candidateCount: Int = 0,
+    val topCandidates: List<CandidateInfo> = emptyList(),
+)
+
+/**
+ * Diagnostics only: one of the best distinct quad candidates of a frame, [corners] in the
+ * coordinates of the analysed image. [areaFraction] is quad area / image area, [edgeSupport]
+ * the fraction of the quad border covered by edges.
+ */
+data class CandidateInfo(
+    val corners: DocumentCorners,
+    val maskIndex: Int,
+    val score: Double,
+    val areaFraction: Float,
+    val edgeSupport: Float,
 )
 
 /**
@@ -86,7 +115,16 @@ data class DetectionResult(
  */
 object DocumentDetector {
 
-    private class Candidate(val corners: DocumentCorners, val contourArea: Double)
+    private class Candidate(val corners: DocumentCorners, val contourArea: Double, val maskIndex: Int)
+
+    /** Winner of the robust stage plus diagnostics. */
+    private class RobustResult(
+        val corners: DocumentCorners?,
+        val maskIndex: Int,
+        val score: Double,
+        val candidateCount: Int,
+        val top: List<CandidateInfo> = emptyList(),
+    )
 
     /**
      * Analyses [bitmap] and returns a [DetectionResult] whose corners are in the
@@ -142,15 +180,25 @@ object DocumentDetector {
             Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGBA2GRAY)
 
             val stage = 1
-            val best = detectRobust(gray, smallW, smallH)
+            val robust = detectRobust(gray, smallW, smallH)
+            val best = robust.corners
 
             val ts = System.currentTimeMillis()
             val durationMs = (System.nanoTime() - startNs) / 1_000_000
+            val top = robust.top.map {
+                it.copy(corners = DocumentGeometry.scaleCorners(it.corners, smallW, smallH, imageWidth, imageHeight))
+            }
             return if (best != null) {
                 val inFullRes = DocumentGeometry.scaleCorners(best, smallW, smallH, imageWidth, imageHeight)
-                DetectionResult(inFullRes, false, ts, imageWidth, imageHeight, stage, durationMs)
+                DetectionResult(
+                    inFullRes, false, ts, imageWidth, imageHeight, stage, durationMs,
+                    robust.maskIndex, robust.score, robust.candidateCount, top,
+                )
             } else {
-                DetectionResult(fallbackCorners(imageWidth, imageHeight), true, ts, imageWidth, imageHeight, 0, durationMs)
+                DetectionResult(
+                    fallbackCorners(imageWidth, imageHeight), true, ts, imageWidth, imageHeight, 0, durationMs,
+                    -1, robust.score, robust.candidateCount, top,
+                )
             }
         } finally {
             small.release()
@@ -219,7 +267,7 @@ object DocumentDetector {
      * Stage 2: several masks (closed auto-Canny edges, Otsu bright/dark split, dilated edges),
      * candidates from the largest blobs and their convex hulls, ranked by [DocumentGeometry.quadScore].
      */
-    private fun detectRobust(gray: Mat, w: Int, h: Int): DocumentCorners? {
+    private fun detectRobust(gray: Mat, w: Int, h: Int): RobustResult {
         val blur = Mat()
         val cAuto = Mat()
         val cSens = Mat()
@@ -269,31 +317,66 @@ object DocumentDetector {
             masks += edgesS1
 
             val candidates = mutableListOf<Candidate>()
-            masks.forEach { collectQuads(it, w, h, candidates) }
+            masks.forEachIndexed { index, mask -> collectQuads(mask, index, w, h, candidates) }
 
             val frameArea = w.toDouble() * h
             var bestScore = 0.0
             var best: DocumentCorners? = null
+            var bestMask = -1
+            val scored = mutableListOf<CandidateInfo>()
             for (c in candidates) {
                 val qa = DocumentGeometry.area(c.corners)
                 if (qa / frameArea > DocumentGeometry.MAX_FRAME_FRACTION) continue
                 val sup = DocumentGeometry.edgeSupport(c.corners) { x, y ->
                     x in 0 until w && y in 0 until h && support[y * w + x].toInt() != 0
                 }
-                val score = DocumentGeometry.quadScore(qa, frameArea, c.contourArea, sup)
+                val onBorder = DocumentGeometry.cornersOnBorder(c.corners, w, h)
+                val score = DocumentGeometry.quadScore(qa, frameArea, c.contourArea, sup, onBorder)
+                if (score > 0.0) {
+                    scored += CandidateInfo(c.corners, c.maskIndex, score, (qa / frameArea).toFloat(), sup)
+                }
                 if (score > bestScore) {
                     bestScore = score
                     best = c.corners
+                    bestMask = c.maskIndex
                 }
             }
-            return if (bestScore >= DocumentGeometry.MIN_SCORE) best else null
+            val top = distinctTop(scored, w, h)
+            return if (bestScore >= DocumentGeometry.MIN_SCORE) {
+                RobustResult(best, bestMask, bestScore, candidates.size, top)
+            } else {
+                RobustResult(null, -1, bestScore, candidates.size, top)
+            }
         } finally {
             listOf(blur, cAuto, cSens, both, supportMat, closedBoth, closedSens, edgesS1, otsu, otsuInv, k3, k5, k7, k9).forEach { it.release() }
         }
     }
 
+    /**
+     * Diagnostics: the [TOP_CANDIDATES] best-scoring candidates that differ from each other
+     * (largest corner distance above 3 % of the image diagonal). The sort is stable, so the
+     * first entry is the winner.
+     */
+    private fun distinctTop(scored: List<CandidateInfo>, w: Int, h: Int): List<CandidateInfo> {
+        val minDistance = 0.03f * hypot(w.toFloat(), h.toFloat())
+        val sorted = scored.sortedByDescending { it.score }
+        val result = mutableListOf<CandidateInfo>()
+        for (c in sorted) {
+            if (result.none { AutoCaptureController.maxCornerDrift(it.corners, c.corners) < minDistance }) {
+                result += c
+                if (result.size == TOP_CANDIDATES) break
+            }
+        }
+        // Diagnostics: always show the best page-sized quad (< 50 % of the image) as the last
+        // entry, so the log tells whether the real page is generated as a candidate at all.
+        if (result.none { it.areaFraction < SMALL_CANDIDATE_FRACTION }) {
+            sorted.firstOrNull { it.areaFraction < SMALL_CANDIDATE_FRACTION }?.let { result += it }
+        }
+        return result
+    }
+
     /** Adds quad candidates for the largest contours of [mask] and their convex hulls. */
-    private fun collectQuads(mask: Mat, w: Int, h: Int, out: MutableList<Candidate>) {
+    private fun collectQuads(mask: Mat, maskIndex: Int, w: Int, h: Int, out: MutableList<Candidate>) {
         val contours = mutableListOf<MatOfPoint>()
         val hierarchy = Mat()
         try {
@@ -303,11 +386,11 @@ object DocumentDetector {
                 .sortedByDescending { it.second }
                 .take(ROBUST_TOP_CONTOURS)
             for ((contour, area) in top) {
-                approxQuad(contour, w, h, ROBUST_MIN_AREA_FRACTION)?.let { out += Candidate(it, area) }
+                approxQuad(contour, w, h, ROBUST_MIN_AREA_FRACTION)?.let { out += Candidate(it, area, maskIndex) }
                 val hull = convexHullOf(contour)
                 if (hull != null) {
                     try {
-                        approxQuad(hull, w, h, ROBUST_MIN_AREA_FRACTION)?.let { out += Candidate(it, area) }
+                        approxQuad(hull, w, h, ROBUST_MIN_AREA_FRACTION)?.let { out += Candidate(it, area, maskIndex) }
                     } finally {
                         hull.release()
                     }
@@ -337,14 +420,10 @@ object DocumentDetector {
             for (eps in epsilons) {
                 Geometry.approxPolyDP(contour2f, approx, eps.toDouble() * arcLen, true)
                 val total = approx.total()
-                if (total == 4L) {
-                    val pts = approx.toArray()
-                    val corners = DocumentGeometry.orderCorners(pts.map { FloatPoint(it.x.toFloat(), it.y.toFloat()) })
-                    if (DocumentGeometry.isPlausibleQuad(corners, w, h, minAreaFraction)) {
-                        return corners
-                    }
-                } else if (total in 5L..12L) {
-                    val corners = cornersFromPoints(approx.toArray())
+                if (total in 4L..12L) {
+                    val corners = DocumentGeometry.cornersFromPoints(
+                        approx.toArray().map { FloatPoint(it.x.toFloat(), it.y.toFloat()) },
+                    )
                     if (DocumentGeometry.isPlausibleQuad(corners, w, h, minAreaFraction)) {
                         return corners
                     }
@@ -355,28 +434,6 @@ object DocumentDetector {
             contour2f.release()
             approx.release()
         }
-    }
-
-    private fun cornersFromPoints(points: Array<Point>): DocumentCorners {
-        var tl = points[0]; var minSum = tl.x + tl.y
-        var br = points[0]; var maxSum = br.x + br.y
-        var tr = points[0]; var maxDiff = tr.x - tr.y
-        var bl = points[0]; var minDiff = bl.x - bl.y
-
-        for (p in points) {
-            val sum = p.x + p.y
-            val diff = p.x - p.y
-            if (sum < minSum) { minSum = sum; tl = p }
-            if (sum > maxSum) { maxSum = sum; br = p }
-            if (diff > maxDiff) { maxDiff = diff; tr = p }
-            if (diff < minDiff) { minDiff = diff; bl = p }
-        }
-        return DocumentCorners(
-            topLeft = FloatPoint(tl.x.toFloat(), tl.y.toFloat()),
-            topRight = FloatPoint(tr.x.toFloat(), tr.y.toFloat()),
-            bottomRight = FloatPoint(br.x.toFloat(), br.y.toFloat()),
-            bottomLeft = FloatPoint(bl.x.toFloat(), bl.y.toFloat()),
-        )
     }
 
     private fun convexHullOf(contour: MatOfPoint): MatOfPoint? {

@@ -39,6 +39,62 @@ class DocumentGeometryTest {
         DocumentGeometry.orderCorners(listOf(tl, tr, br))
     }
 
+    @Test
+    fun orderCorners_rotatedRectangle_isStableForAllPermutations() {
+        for (angle in listOf(0, 15, 30, 40, 45, 50, 60, 75)) {
+            val ordered = rotatedRect(angle.toDouble())
+            permutations(ordered.toList()).forEach { perm ->
+                assertEquals("angle $angle permutation $perm", ordered, DocumentGeometry.orderCorners(perm))
+            }
+        }
+    }
+
+    @Test
+    fun orderCorners_rotatedRectangle_isClockwiseFromSmallestSum() {
+        for (angle in listOf(30, 40, 50, 60)) {
+            val c = DocumentGeometry.orderCorners(rotatedRect(angle.toDouble()).toList())
+            val pts = c.toList()
+            val sums = pts.map { it.x + it.y }
+            assertEquals("angle $angle topLeft has smallest x+y", sums.min(), sums[0], 1e-3f)
+            // Clockwise on screen (y down) means a positive cross product for each turn.
+            for (i in 0 until 4) {
+                val a = pts[i]
+                val b = pts[(i + 1) % 4]
+                val d = pts[(i + 2) % 4]
+                val cross = (b.x - a.x) * (d.y - b.y) - (b.y - a.y) * (d.x - b.x)
+                assertTrue("angle $angle turn $i", cross > 0f)
+            }
+        }
+    }
+
+    // --- cornersFromPoints --------------------------------------------------
+
+    @Test
+    fun cornersFromPoints_fourPoints_sameAsOrderCorners() {
+        for (angle in listOf(0, 30, 45, 60)) {
+            val pts = rotatedRect(angle.toDouble()).toList()
+            assertEquals(
+                "angle $angle",
+                DocumentGeometry.orderCorners(pts.reversed()),
+                DocumentGeometry.cornersFromPoints(pts.reversed()),
+            )
+        }
+    }
+
+    @Test
+    fun cornersFromPoints_extraPointsOnEdges_sameAsOrderCorners() {
+        // 45 degrees is excluded: an edge is then perpendicular to x + y, so the extremes tie.
+        for (angle in listOf(0, 30, 40, 60)) {
+            val c = rotatedRect(angle.toDouble())
+            val mid = { a: FloatPoint, b: FloatPoint -> FloatPoint((a.x + b.x) / 2f, (a.y + b.y) / 2f) }
+            val withExtra = listOf(
+                mid(c.topLeft, c.topRight), c.bottomRight, c.topLeft,
+                mid(c.bottomRight, c.bottomLeft), c.topRight, c.bottomLeft,
+            )
+            assertEquals("angle $angle", c, DocumentGeometry.cornersFromPoints(withExtra))
+        }
+    }
+
     // --- targetSize ---------------------------------------------------------
 
     @Test
@@ -278,6 +334,33 @@ class DocumentGeometryTest {
     }
 
     @Test
+    fun quadScore_pageQuarterOfImage_beatsFullFrameQuadWithBorderCorners() {
+        val frame = 100.0
+        val page = DocumentGeometry.quadScore(25.0, frame, 24.0, 0.6f, cornersOnBorder = 0)
+        val scene = DocumentGeometry.quadScore(85.0, frame, 80.0, 0.75f, cornersOnBorder = 3)
+        assertTrue("page=$page scene=$scene", page > scene)
+    }
+
+    @Test
+    fun quadScore_borderCornersReduceScore() {
+        val none = DocumentGeometry.quadScore(50.0, 100.0, 50.0, 0.8f, 0)
+        val two = DocumentGeometry.quadScore(50.0, 100.0, 50.0, 0.8f, 2)
+        assertEquals(none * 0.25, two, 1e-9)
+    }
+
+    @Test
+    fun cornersOnBorder_countsCornersNearImageEdge() {
+        val c = DocumentCorners(
+            topLeft = FloatPoint(0f, 3f),
+            topRight = FloatPoint(100f, 50f),
+            bottomRight = FloatPoint(400f, 600f),
+            bottomLeft = FloatPoint(50f, 700f),
+        )
+        // 480x720 image, margin 2 % of 480 = 9.6 px: tl (x=0), tr is inside, br inside, bl inside
+        assertEquals(1, DocumentGeometry.cornersOnBorder(c, 480, 720))
+    }
+
+    @Test
     fun quadScore_largerAndBetterFilledQuad_scoresHigher() {
         val big = DocumentGeometry.quadScore(60.0, 100.0, 58.0, 0.9f)
         val small = DocumentGeometry.quadScore(20.0, 100.0, 19.0, 0.9f)
@@ -289,6 +372,31 @@ class DocumentGeometryTest {
 
 
     // --- helpers ------------------------------------------------------------
+
+    /**
+     * A 200x100 rectangle centred at (300, 300), rotated clockwise on screen by [degrees].
+     * Corners are listed clockwise starting at the corner with the smallest x + y
+     * (ties: smaller y, then smaller x), which is the contract of orderCorners.
+     */
+    private fun rotatedRect(degrees: Double): DocumentCorners {
+        val rad = Math.toRadians(degrees)
+        val cos = Math.cos(rad)
+        val sin = Math.sin(rad)
+        val clockwise = listOf(-100.0 to -50.0, 100.0 to -50.0, 100.0 to 50.0, -100.0 to 50.0).map { (x, y) ->
+            FloatPoint((300 + x * cos - y * sin).toFloat(), (300 + x * sin + y * cos).toFloat())
+        }
+        val start = clockwise.indices.minWithOrNull(
+            compareBy<Int> { clockwise[it].x + clockwise[it].y }
+                .thenBy { clockwise[it].y }
+                .thenBy { clockwise[it].x },
+        )!!
+        return DocumentCorners(
+            clockwise[start],
+            clockwise[(start + 1) % 4],
+            clockwise[(start + 2) % 4],
+            clockwise[(start + 3) % 4],
+        )
+    }
 
     private fun rect(w: Float, h: Float) = DocumentCorners(
         FloatPoint(0f, 0f), FloatPoint(w, 0f), FloatPoint(w, h), FloatPoint(0f, h)

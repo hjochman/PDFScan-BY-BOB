@@ -5,6 +5,7 @@ import android.os.Environment
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -101,8 +102,21 @@ class ScanFolderSettings(
         }
     }
 
+    // ------------------------------------------------------------------
+    // Debug: coloured candidate quads in the scan preview (debug builds only, default off)
+    // ------------------------------------------------------------------
+
+    val showCandidateOverlay: Flow<Boolean> = dataStore.data
+        .map { prefs -> prefs[KEY_SHOW_CANDIDATE_OVERLAY] ?: DEFAULT_SHOW_CANDIDATE_OVERLAY }
+        .distinctUntilChanged()
+
+    suspend fun setShowCandidateOverlay(show: Boolean) {
+        dataStore.edit { it[KEY_SHOW_CANDIDATE_OVERLAY] = show }
+    }
+
     companion object {
         const val DEFAULT_FOLDER_NAME = "Scans"
+        const val DEFAULT_SHOW_CANDIDATE_OVERLAY = false
         const val DEFAULT_SMOOTHING_STRENGTH = 5
         const val MIN_SMOOTHING_STRENGTH = 0
         const val MAX_SMOOTHING_STRENGTH = 10
@@ -121,6 +135,7 @@ class ScanFolderSettings(
         private val KEY_MAX_DIMENSION = intPreferencesKey("scan_max_dimension_px")
         private val KEY_JPEG_QUALITY = intPreferencesKey("scan_jpeg_quality_percent")
         private val KEY_SMOOTHING_STRENGTH = intPreferencesKey("scan_smoothing_strength")
+        private val KEY_SHOW_CANDIDATE_OVERLAY = booleanPreferencesKey("debug_show_candidate_overlay")
     }
 }
 

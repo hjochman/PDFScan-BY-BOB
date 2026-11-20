@@ -25,7 +25,7 @@ class AutoCaptureControllerTest {
             scope = testScope,
             countdownSeconds = 3,
             tickMs = 1_000L,
-            maxDriftPx = 15f,
+            maxDriftFraction = 0.01f,
             onFire = { firedCount++ },
         )
     }
@@ -37,12 +37,14 @@ class AutoCaptureControllerTest {
     private fun makeResult(
         corners: DocumentCorners,
         isFallback: Boolean = false,
+        width: Int = 1000,
+        height: Int = 1000,
     ) = DetectionResult(
         corners = corners,
         isFallback = isFallback,
         timestampMs = System.currentTimeMillis(),
-        imageWidth = 1000,
-        imageHeight = 1000,
+        imageWidth = width,
+        imageHeight = height,
     )
 
     private fun stableCorners() = DocumentCorners(
@@ -124,7 +126,7 @@ class AutoCaptureControllerTest {
         controller.onDetectionResult(makeResult(stableCorners()))
         advanceTimeBy(1_100L) // past first tick
 
-        // Move corners by 20 px (> maxDriftPx = 15)
+        // Move corners by 20 px (> 1 % of the 1000x1000 diagonal = 14.1 px)
         controller.onDetectionResult(makeResult(shiftedCorners(dx = 20f)))
         advanceTimeBy(1L)
 
@@ -141,12 +143,51 @@ class AutoCaptureControllerTest {
         controller.onDetectionResult(makeResult(stableCorners()))
         advanceTimeBy(1_100L) // Stable(2)
 
-        // Move corners by 5 px (< maxDriftPx = 15)
+        // Move corners by 5 px (< 14.1 px)
         controller.onDetectionResult(makeResult(shiftedCorners(dx = 5f)))
         advanceTimeBy(1L)
 
         assertEquals(AutoCaptureState.Stable(2), controller.state.value)
         assertEquals(0, firedCount)
+    }
+
+    // -------------------------------------------------------------------------
+    // Drift threshold is relative to the frame size
+    // -------------------------------------------------------------------------
+
+    /** Starts a countdown, moves the corners by [dx] px and returns the resulting state. */
+    private fun TestScope.stateAfterShift(dx: Float, width: Int, height: Int): AutoCaptureState {
+        controller.onDetectionResult(makeResult(stableCorners(), width = width, height = height))
+        advanceTimeBy(1_100L) // Stable(2)
+        controller.onDetectionResult(makeResult(shiftedCorners(dx = dx), width = width, height = height))
+        advanceTimeBy(1L)
+        return controller.state.value
+    }
+
+    @Test
+    fun `10 px drift is stable at 1280x720 (threshold 14_7 px)`() = testScope.runTest {
+        assertEquals(AutoCaptureState.Stable(2), stateAfterShift(10f, 1280, 720))
+    }
+
+    @Test
+    fun `16 px drift resets at 1280x720 (threshold 14_7 px)`() = testScope.runTest {
+        assertEquals(AutoCaptureState.Idle, stateAfterShift(16f, 1280, 720))
+    }
+
+    @Test
+    fun `10 px drift resets at 640x360 (threshold 7_3 px)`() = testScope.runTest {
+        assertEquals(AutoCaptureState.Idle, stateAfterShift(10f, 640, 360))
+    }
+
+    @Test
+    fun `20 px drift is stable at 1920x1080 (threshold 22 px)`() = testScope.runTest {
+        assertEquals(AutoCaptureState.Stable(2), stateAfterShift(20f, 1920, 1080))
+    }
+
+    @Test
+    fun `default fraction is about 15 px at 1280x720`() {
+        val px = AutoCaptureController.DEFAULT_MAX_DRIFT_FRACTION * kotlin.math.hypot(1280f, 720f)
+        assertEquals(15f, px, 0.5f)
     }
 
     // -------------------------------------------------------------------------

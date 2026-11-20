@@ -206,8 +206,10 @@ fun ScanScreen(
                     val isDebuggable = (context.applicationInfo.flags and
                         android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
                     val smoothingStrength by viewModel.smoothingStrength.collectAsState()
+                    val candidateOverlayEnabled by viewModel.showCandidateOverlay.collectAsState()
                     CameraPreviewContent(
                         latestDetection = state.latestDetection,
+                        showCandidates = isDebuggable && candidateOverlayEnabled,
                         autoCaptureState = autoCaptureState,
                         diagnostics = if (isDebuggable) diagnostics else null,
                         smoothingStrength = smoothingStrength,
@@ -275,6 +277,7 @@ fun ScanScreen(
 @Composable
 private fun CameraPreviewContent(
     latestDetection: DetectionResult?,
+    showCandidates: Boolean,
     autoCaptureState: AutoCaptureState,
     diagnostics: String?,
     smoothingStrength: Int,
@@ -302,6 +305,7 @@ private fun CameraPreviewContent(
         if (latestDetection != null && !latestDetection.isFallback && previewSize != IntSize.Zero) {
             DocumentOverlay(
                 detection = latestDetection,
+                showCandidates = showCandidates,
                 modifier = Modifier
                     .fillMaxSize()
                     .clipToBounds(),
@@ -412,6 +416,7 @@ private fun CountdownDisplay(
 @Composable
 private fun DocumentOverlay(
     detection: DetectionResult,
+    showCandidates: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Canvas(modifier = modifier) {
@@ -424,6 +429,20 @@ private fun DocumentOverlay(
                 viewHeight = size.height,
             )
             return Offset(p.x, p.y)
+        }
+
+        if (showCandidates) {
+            // Debug only: best distinct candidates (1 yellow, 2 red, 3 green), thin lines
+            val colors = listOf(Color(0xFFFFEB3B), Color(0xFFF44336), Color(0xFF4CAF50))
+            detection.topCandidates.forEachIndexed { i, c ->
+                val pts = c.corners.toList().map { mapPoint(it) }
+                val p = Path().apply {
+                    moveTo(pts[0].x, pts[0].y)
+                    for (k in 1 until pts.size) lineTo(pts[k].x, pts[k].y)
+                    close()
+                }
+                drawPath(p, color = colors[i % colors.size], style = Stroke(width = 2f))
+            }
         }
 
         val corners = detection.corners
